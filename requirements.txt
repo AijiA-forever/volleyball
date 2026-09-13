@@ -1,0 +1,11 @@
+# 排球训练智能分析系统（Web 整合版）
+# 已在 conda env: volleyball_analytics 验证通过
+numpy>=1.24
+opencv-python>=4.8
+pillow>=10.0
+ultralytics>=8.2
+torch>=2.2
+fastapi>=0.110
+uvicorn>=0.29
+python-multipart>=0.0.6
+websockets>=11.0

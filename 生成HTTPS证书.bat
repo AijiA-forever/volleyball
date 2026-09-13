@@ -1,0 +1,7 @@
+@echo off
+chcp 65001 >nul
+cd /d "%~dp0"
+set PYTHON=C:\miniconda\envs\volleyball_analytics\python.exe
+if not exist "%PYTHON%" set PYTHON=python
+"%PYTHON%" make_cert.py %*
+pause

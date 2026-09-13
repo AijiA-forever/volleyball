@@ -1,0 +1,743 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>排球训练智能分析系统（Web 整合版）</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; font-family:"Microsoft YaHei",sans-serif; }
+body { background:#f0f2f5; }
+header { background:#1f6feb; color:#fff; padding:12px 24px; display:flex; justify-content:space-between; align-items:center; }
+header h1 { font-size:20px; }
+header .user { cursor:pointer; }
+.container { display:flex; min-height:calc(100vh - 52px); }
+nav { width:190px; background:#fff; border-right:1px solid #e0e0e0; padding:14px 0; }
+nav button { display:block; width:100%; text-align:left; padding:12px 22px; border:none; background:none; font-size:15px; cursor:pointer; color:#444; }
+nav button:hover { background:#f0f6ff; }
+nav button.active { background:#1f6feb; color:#fff; }
+nav .nav-group { color:#999; font-size:12px; padding:10px 22px 4px; }
+main { flex:1; padding:22px; overflow:auto; }
+.panel { display:none; }
+.panel.active { display:block; }
+.card { background:#fff; border-radius:12px; padding:20px; margin-bottom:18px; box-shadow:0 2px 8px rgba(0,0,0,.06); }
+.card h3 { margin-bottom:12px; color:#1f3a5f; }
+.row { display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin-bottom:12px; }
+select, input[type=text], input[type=number], textarea { padding:8px 10px; border:1px solid #c9d3e0; border-radius:6px; font-size:14px; }
+.btn { padding:8px 16px; border:0; border-radius:6px; cursor:pointer; background:#1f6feb; color:#fff; font-size:14px; }
+.btn.green { background:#2da44e; }
+.btn.gray { background:#6e7781; }
+.btn.red { background:#d1242f; }
+.btn.small { padding:4px 10px; font-size:13px; }
+.btn:disabled { opacity:.55; cursor:not-allowed; }
+.upload-box { border:2px dashed #1f6feb; border-radius:10px; padding:26px; text-align:center; margin-bottom:12px; cursor:pointer; }
+video, img { max-width:100%; border-radius:8px; margin:8px 0; background:#000; }
+.grid2 { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+table { width:100%; border-collapse:collapse; font-size:14px; }
+th, td { border-bottom:1px solid #e7ecf3; padding:8px 6px; text-align:left; vertical-align:top; }
+th { color:#666; font-weight:600; }
+.feedback { background:#fff8e1; border-radius:6px; padding:8px 12px; margin:4px 0; font-size:14px; }
+.metric { display:inline-block; background:#eef4ff; border-radius:8px; padding:12px 20px; margin:0 10px 10px 0; text-align:center; }
+.metric b { display:block; font-size:26px; color:#1f6feb; }
+.tabs { display:flex; gap:8px; margin-bottom:14px; }
+.tabs button { padding:7px 14px; border:1px solid #c9d3e0; background:#fff; border-radius:6px; cursor:pointer; }
+.tabs button.active { background:#1f6feb; color:#fff; border-color:#1f6feb; }
+.modal { position:fixed; inset:0; background:rgba(0,0,0,.45); display:none; align-items:center; justify-content:center; z-index:20; }
+.modal.show { display:flex; }
+.modal-box { background:#fff; width:min(760px,94vw); max-height:90vh; overflow:auto; border-radius:12px; padding:22px; }
+.modal-box h3 { margin-bottom:12px; }
+.speed-btn { padding:4px 10px; margin-right:6px; border-radius:4px; cursor:pointer; }
+.empty { color:#8c959f; padding:14px; text-align:center; }
+canvas { max-width:100%; border:1px solid #d0d7de; background:#000; }
+#toast { position:fixed; top:18px; right:20px; background:#1a1f36; color:#fff; padding:10px 16px; border-radius:8px; display:none; z-index:99; }
+</style>
+</head>
+<body>
+<div id="toast"></div>
+<header>
+  <h1>🏐 排球训练智能分析系统</h1>
+  <div class="user" onclick="openLogin()"><span id="userBadge">未登录，点击进入</span></div>
+</header>
+<div class="container">
+  <nav id="nav">
+    <div class="nav-group" id="studentGroup">学生端</div>
+    <button data-panel="practice" class="active">🏃 练习分析</button>
+    <button data-panel="standards">🎥 标准动作学习</button>
+    <button data-panel="history">📋 我的训练记录</button>
+    <div class="nav-group">教练端</div>
+    <button data-panel="coachStd">📚 标准动作库管理</button>
+    <button data-panel="report">📊 训练报表</button>
+    <button data-panel="calibration">📐 视角标定</button>
+  </nav>
+
+  <main>
+    <!-- 练习分析 -->
+    <section id="panel-practice" class="panel active">
+      <div class="card">
+        <h3>练习分析</h3>
+        <div class="row">
+          <label>动作类型：</label>
+          <select id="practiceAction"></select>
+          <label>对照标准：</label>
+          <select id="practiceStandard"></select>
+          <label>学生姓名：</label>
+          <input type="text" id="practiceStudent" placeholder="请输入姓名">
+          <label>视角标定：</label>
+          <select id="practiceCalibration">
+            <option value="">不使用</option>
+            <option value="viewA">视角 A</option>
+            <option value="viewB">视角 B</option>
+          </select>
+        </div>
+        <div class="tabs">
+          <button data-tab="video" class="active">视频分析</button>
+          <button data-tab="image">图片分析</button>
+          <button data-tab="camera">摄像头实时</button>
+        </div>
+        <div id="sub-video">
+          <div class="upload-box" onclick="document.getElementById('videoFile').click()">点击选择训练视频（mp4/avi/mov）</div>
+          <input type="file" id="videoFile" accept="video/*" hidden>
+          <video id="videoPreview" controls style="display:none"></video>
+          <div class="row"><label><input type="checkbox" id="dualMode"> 双视角融合（需要两台摄像机同步视频）</label></div>
+          <div id="dualBox" style="display:none">
+            <div class="upload-box" onclick="document.getElementById('videoFile2').click()">点击选择第二个视角的视频</div>
+            <input type="file" id="videoFile2" accept="video/*" hidden>
+            <video id="videoPreview2" controls style="display:none"></video>
+          </div>
+          <div class="row"><button class="btn green" id="analyzeVideoBtn">开始分析</button><span id="videoProgress" style="color:#666"></span></div>
+          <div id="videoResult"></div>
+        </div>
+        <div id="sub-image" style="display:none">
+          <div class="upload-box" onclick="document.getElementById('imageFile').click()">点击选择训练照片（jpg/png）</div>
+          <input type="file" id="imageFile" accept="image/*" hidden>
+          <img id="imagePreview" style="display:none">
+          <div class="row"><button class="btn green" id="analyzeImageBtn">开始分析</button></div>
+          <div id="imageResult"></div>
+        </div>
+        <div id="sub-camera" style="display:none">
+          <p style="margin-bottom:8px">实时分析：摄像头画面逐帧发送到后端，实时显示动作评分、动作计数和指导建议；停止后自动保存录像与训练记录。</p>
+          <div class="row"><label>摄像头设备：</label><select id="camDevice" style="min-width:220px"></select>
+            <button class="btn small" onclick="refreshCameras()">刷新设备</button>
+            <button class="btn small gray" onclick="testCamera()">测试摄像头</button>
+          </div>
+          <div class="row"><button class="btn green" id="startCam">开始实时分析</button><button class="btn red" id="stopCam" style="display:none">停止并保存</button><span id="camStatus" style="color:#666"></span></div>
+          <video id="camTest" autoplay muted playsinline style="display:none;max-width:360px;border-radius:8px;background:#000"></video>
+          <div id="camDiag" style="color:#888;font-size:13px;margin:4px 0 8px"></div>
+          <canvas id="camOut" width="640" height="480" style="max-width:100%;border-radius:8px;background:#000"></canvas>
+          <div id="camLive"></div>
+          <div id="camResult"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 标准动作学习（学生） -->
+    <section id="panel-standards" class="panel">
+      <div class="card"><h3>标准动作视频库</h3><div id="studyList"></div></div>
+      <div class="card"><h3>慢放与关键帧学习</h3><div id="studyPlayer"></div></div>
+    </section>
+
+    <!-- 历史 -->
+    <section id="panel-history" class="panel">
+      <div class="card"><h3>我的训练记录</h3><div id="historyList"></div></div>
+      <div class="card"><h3>记录详情</h3><div id="historyDetail"></div></div>
+    </section>
+
+    <!-- 教练：标准动作库管理 -->
+    <section id="panel-coachStd" class="panel">
+      <div class="card">
+        <h3>标准动作库管理</h3>
+        <div class="row"><button class="btn green" onclick="openStdEdit()">＋ 新建标准动作</button></div>
+        <div id="coachStdList"></div>
+      </div>
+    </section>
+
+    <!-- 报表 -->
+    <section id="panel-report" class="panel">
+      <div class="card"><h3>整体训练报表</h3><div id="reportOverview"></div></div>
+      <div class="card"><h3>学生明细</h3><div id="reportStudents"></div></div>
+      <div class="card"><h3>学生详情</h3><div id="reportStudentDetail"></div></div>
+    </section>
+
+    <!-- 标定 -->
+    <section id="panel-calibration" class="panel">
+      <div class="card">
+        <h3>训练场地视角标定</h3>
+        <p style="margin-bottom:10px">上传一张含排球场地的画面，点击画布标记四个端点：远左、远右、近左、近右。保存后用于记录统一视角基准。</p>
+        <div class="row"><label>标定视角：</label><select id="calibLabel"><option value="viewA">视角 A</option><option value="viewB">视角 B</option></select></div>
+        <input type="file" id="calibImage" accept="image/*">
+        <canvas id="calibCanvas" width="960" height="540"></canvas>
+        <div class="row"><button class="btn green" onclick="saveCalibration()">保存标定</button></div>
+        <div id="calibSaved"></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- 登录 -->
+<div class="modal" id="loginModal">
+  <div class="modal-box" style="max-width:420px">
+    <h3>选择身份进入</h3>
+    <div class="row"><label>姓名/账号</label><input type="text" id="loginName" placeholder="例如：张三"></div>
+    <div class="row"><label>身份</label><select id="loginRole"><option value="student">学生</option><option value="coach">教练</option></select></div>
+    <div class="row"><button class="btn" onclick="doLogin()">进入系统</button></div>
+  </div>
+</div>
+
+<!-- 标准动作编辑/新建 -->
+<div class="modal" id="stdModal">
+  <div class="modal-box">
+    <h3 id="stdModalTitle">编辑标准动作</h3>
+    <input type="hidden" id="stdId">
+    <div class="row"><label>名称</label><input type="text" id="stdName" style="flex:1"></div>
+    <div class="row"><label>动作类型</label><select id="stdAction"></select></div>
+    <div class="row"><label>说明</label><textarea id="stdDesc" rows="2" style="flex:1"></textarea></div>
+    <div class="row"><label>备注</label><input type="text" id="stdNote" style="flex:1"></div>
+    <div class="row"><label>示范视频</label><input type="file" id="stdVideo" accept="video/*"></div>
+    <div class="row"><label>封面图</label><input type="file" id="stdCover" accept="image/*"></div>
+    <div class="row"><label>标准参数(JSON)</label><textarea id="stdParams" rows="12" style="flex:1;font-family:Consolas,monospace;font-size:12px"></textarea></div>
+    <div id="stdMediaPreview"></div>
+    <div class="row"><button class="btn green" onclick="saveStd()">保存</button><button class="btn gray" onclick="closeModal('stdModal')">取消</button></div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const ACTION = {dig:'垫球', serve:'发球', set:'传球', spike:'扣球'};
+let state = { user: JSON.parse(localStorage.getItem('vb_user')||'null'), role:'student', standards:[], calib:[] };
+if(state.user && state.user.role){ state.role = state.user.role; }
+let calibCtx = null, calibImg = null, calibPoints = {};
+
+function toast(msg){ const t=$('toast'); t.textContent=msg; t.style.display='block'; setTimeout(()=>t.style.display='none',2600); }
+async function api(url, opts={}) {
+  const res = await fetch(url, opts);
+  if(!res.ok){ let msg='请求失败'; try{ msg=(await res.json()).detail||msg; }catch(e){} throw new Error(msg); }
+  return res.json();
+}
+
+function showPanel(name){
+  if(state.role!=='coach' && ['coachStd','report','calibration'].includes(name)){ toast('请以教练身份登录'); return; }
+  document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('active', b.dataset.panel===name));
+  document.querySelectorAll('.panel').forEach(p=>p.classList.toggle('active', p.id==='panel-'+name));
+  if(name==='practice') loadPracticeOptions();
+  if(name==='standards') loadStudy();
+  if(name==='history') loadHistory();
+  if(name==='coachStd') loadCoachStd();
+  if(name==='report') loadReport();
+}
+document.querySelectorAll('#nav button').forEach(b=>b.addEventListener('click',()=>showPanel(b.dataset.panel)));
+document.querySelectorAll('.tabs button').forEach(b=>b.addEventListener('click',()=>{
+  document.querySelectorAll('.tabs button').forEach(x=>x.classList.toggle('active',x===b));
+  ['video','image','camera'].forEach(t=>{$('sub-'+t).style.display = t===b.dataset.tab?'block':'none';});
+}));
+
+function openLogin(){ $('loginModal').classList.add('show'); }
+function closeModal(id){ $(id).classList.remove('show'); }
+async function doLogin(){
+  const username=$('loginName').value.trim() || '游客';
+  const role=$('loginRole').value;
+  const body=new FormData(); body.append('username',username); body.append('display_name',username); body.append('role',role);
+  try{
+    const u=await api('/api/login',{method:'POST',body});
+    state.user=u; state.role=u.role; localStorage.setItem('vb_user',JSON.stringify(u));
+    $('userBadge').textContent=(u.role==='coach'?'教练：':'学生：')+u.username;
+    $('practiceStudent').value = u.role==='student'?u.username:'';
+    closeModal('loginModal'); refreshNav(); loadPracticeOptions(); toast('登录成功');
+  }catch(e){ toast(e.message); }
+}
+function refreshNav(){ document.querySelectorAll('#nav .nav-group').forEach(g=>g.style.display='block'); }
+function logout(){ localStorage.removeItem('vb_user'); state.user=null; state.role='student'; location.reload(); }
+
+function fillActionSelects(){
+  const opts=Object.entries(ACTION).map(([v,l])=>`<option value="${v}">${l}</option>`).join('');
+  ['practiceAction','stdAction'].forEach(id=>$(id).innerHTML=opts);
+}
+async function loadPracticeOptions(){
+  state.standards=await api('/api/standards');
+  const sel=$('practiceStandard');
+  sel.innerHTML='<option value="">使用系统默认参数</option>'+state.standards.map(s=>`<option value="${s.id}">${ACTION[s.action_type]} · ${s.name}</option>`).join('');
+  sel.onchange=()=>{
+    const s=state.standards.find(x=>x.id==Number(sel.value));
+    if(s && s.action_type!==$('practiceAction').value){ $('practiceAction').value=s.action_type; }
+  };
+}
+
+// ---------- 练习分析 ----------
+function selectFile(input, preview, isVideo){
+  input.onchange=()=>{ const f=input.files[0]; if(!f)return;
+    const url=URL.createObjectURL(f); const el=$(preview);
+    el.src=url; el.style.display='block';
+  };
+}
+function fileInputs(){
+  selectFile($('videoFile'),'videoPreview',true);
+  selectFile($('imageFile'),'imagePreview',false);
+  const v2 = $('videoFile2');
+  if(v2){ v2.onchange = function(){ const f=v2.files[0]; if(!f) return; const el=$('videoPreview2'); el.src=URL.createObjectURL(f); el.style.display='block'; }; }
+  const dual = $('dualMode');
+  if(dual){ dual.onchange = function(){ $('dualBox').style.display = this.checked ? 'block' : 'none'; }; }
+}
+function practiceParams(){
+  const student=$('practiceStudent').value.trim();
+  if(!student){ toast('请先填写/选择姓名'); throw new Error('no student'); }
+  return {
+    student,
+    action_type:$('practiceAction').value,
+    standard_id:$('practiceStandard').value,
+    calibration_label:$('practiceCalibration') ? $('practiceCalibration').value : ''
+  };
+}
+async function analyzeVideo(){
+  const f=$('videoFile').files[0]; if(!f) return toast('请选择视频');
+  const btn=$('analyzeVideoBtn'); btn.disabled=true; $('videoProgress').textContent='分析中，模型推理可能需要较长时间…';
+  try{
+    const p=practiceParams();
+    const dualOn = $('dualMode') && $('dualMode').checked && $('videoFile2') && $('videoFile2').files[0];
+    let r;
+    if(dualOn){
+      const fd=new FormData();
+      fd.append('file',f); fd.append('file2',$('videoFile2').files[0]);
+      Object.entries(p).filter(([k,v])=>v!==''&&v!=null).forEach(([k,v])=>{ if(k==='calibration_label'){ fd.append('calibration_a',v); fd.append('calibration_b',v); } else { fd.append(k,v); } });
+      r=await api('/api/analyze/dual',{method:'POST',body:fd});
+    } else {
+      const fd=new FormData(); fd.append('file',f);
+      Object.entries(p).filter(([k,v])=>v!==''&&v!=null).forEach(([k,v])=>fd.append(k,v));
+      r=await api('/api/analyze/video',{method:'POST',body:fd});
+    }
+    renderVideoResult(r); loadHistory();
+  }catch(e){ toast(e.message); }
+  finally{ btn.disabled=false; $('videoProgress').textContent=''; }
+}
+function renderVideoResult(r){
+  const sum=r.summary; let fbHtml='';
+  (r.attempts||[]).forEach((a,i)=>{
+    fbHtml+='<div class="feedback"><b>第 '+(i+1)+' 个动作</b>：得分 '+a.avg_score+'，'+(a.is_standard?'标准 ✓':'需改进 ✗')+'，'+a.frames+' 帧</div>';
+    (a.feedback||[]).forEach(x=>fbHtml+='<div style="padding-left:16px">• '+x+'</div>');
+  });
+  $('videoResult').innerHTML='<h4 style="margin:10px 0">分析结果</h4><video src="'+r.video_url+'" controls></video><div class="metric"><b>'+sum.average_score+'</b>平均分</div><div class="metric"><b>'+(sum.best_score!==undefined?sum.best_score:0)+'</b>最高分</div><div class="metric"><b>'+sum.action_count+'</b>动作数</div><div class="metric"><b>'+sum.standard_count+'</b>标准数</div><div class="metric"><b>'+sum.total_frames+'</b>总帧数</div><div class="metric"><b>'+(sum.max_person_count||1)+'</b>画面最多人数</div><div class="metric"><b>'+((sum.primary_ids||[]).join(',')||'-')+'</b>主分析ID</div><canvas id="scoreChart"></canvas>'+fbHtml; drawScoreChart(sum.score_curve);
+}
+
+function drawScoreChart(points){
+  const cv=document.getElementById('scoreChart');
+  if(!cv) return;
+  const parent=cv.parentElement||document.body;
+  const cssW=Math.max(280, Math.min((parent.clientWidth-20)||600, 900));
+  const cssH=220;
+  const dpr=window.devicePixelRatio||1;
+  cv.width=cssW*dpr; cv.height=cssH*dpr;
+  cv.style.width=cssW+'px'; cv.style.height=cssH+'px';
+  const ctx=cv.getContext('2d');
+  ctx.setTransform(1,0,0,1,0,0); ctx.clearRect(0,0,cv.width,cv.height);
+  ctx.scale(dpr,dpr);
+  if(!points || points.length<2){
+    ctx.font='16px Microsoft YaHei'; ctx.fillStyle='#8c959f'; ctx.textAlign='center';
+    ctx.fillText('有效评分帧不足，无法绘制曲线', cssW/2, 30);
+    return;
+  }
+  const padL=40,padR=12,padT=18,padB=26;
+  const w=cssW-padL-padR, h=cssH-padT-padB;
+  ctx.strokeStyle='#e4e9f0'; ctx.lineWidth=1;
+  for(let i=0;i<=5;i++){
+    const y=padT+h-(h*(i*25)/100);
+    ctx.beginPath(); ctx.moveTo(padL,y); ctx.lineTo(padL+w,y); ctx.stroke();
+    ctx.fillStyle='#8c959f'; ctx.font='11px sans-serif'; ctx.textAlign='right';
+    ctx.fillText(String(i*25), padL-6, y+4);
+  }
+  ctx.strokeStyle='#1f6feb'; ctx.lineWidth=2; ctx.beginPath();
+  points.forEach(function(v,i){
+    const x=padL+w*i/(points.length-1);
+    const val=Math.max(0,Math.min(100,v||0));
+    const y=padT+h-(h*val/100);
+    if(i===0){ctx.moveTo(x,y);}else{ctx.lineTo(x,y);}
+  });
+  ctx.stroke();
+  ctx.fillStyle='#d1242f'; ctx.font='12px Microsoft YaHei'; ctx.textAlign='left';
+  ctx.fillText('评分曲线（0–100）', padL, cssH-8);
+}
+async function analyzeImage(){
+  const f=$('imageFile').files[0]; if(!f) return toast('请选择图片');
+  const btn=$('analyzeImageBtn'); btn.disabled=true;
+  try{
+    const p=practiceParams(); const fd=new FormData(); fd.append('file',f);
+    Object.entries(p).filter(([k,v])=>v!==''&&v!=null).forEach(([k,v])=>fd.append(k,v));
+    const r=await api('/api/analyze/image',{method:'POST',body:fd});
+    const j=r.summary.judgment||{}; let fb=(r.summary.feedback||[]).map(x=>'<div>• '+x+'</div>').join('');
+    $('imageResult').innerHTML='<h4 style="margin:10px 0">分析结果</h4><img src="'+r.image_url+'"><div class="metric"><b>'+r.summary.average_score+'</b>得分</div><div>判定：'+(j.is_correct?'标准':'待改进')+'</div>'+fb;
+  }catch(e){ toast(e.message); } finally{ btn.disabled=false; }
+}
+// 实时分析（摄像头）
+let camStream=null, camWs=null, camSendBusy=false, camLastSend=0, camSrcVideo=null, camLastAnnotated=0, camFrameCount=0;
+let camTestStream=null, camSendCount=0, camBlackHits=0, camLoopRunning=false;
+
+function camErrorMessage(err){
+  const name = err && err.name ? err.name : 'Error';
+  const map = {
+    NotAllowedError: '摄像头权限被拒绝：请点击地址栏左侧图标，把“摄像头”改为“允许”；若之前拒绝过，需要在浏览器设置里清除本站权限后重试。',
+    PermissionDeniedError: '摄像头权限被拒绝：请在浏览器设置中允许本站访问摄像头。',
+    NotFoundError: '未检测到摄像头设备：请确认 Iriun Webcam 已启动、手机已连接，然后点“刷新设备”。',
+    DevicesNotFoundError: '未检测到摄像头设备：请确认 Iriun Webcam 正在运行。',
+    NotReadableError: '摄像头被其他程序占用：请关闭微信/腾讯会议/OBS/Iriun 预览等其他使用摄像头的软件后重试。',
+    TrackStartError: '摄像头无法启动：可能被其他程序占用，请关闭占用摄像头的软件。',
+    OverconstrainedError: '当前摄像头不支持请求的分辨率，请换一个设备或降低分辨率。',
+    SecurityError: '浏览器安全策略阻止了摄像头访问：请使用 http://127.0.0.1:8000 或 https 打开，不要用 file:// 直接打开网页。',
+    AbortError: '摄像头启动被中断，请重试。'
+  };
+  return (map[name] || ('摄像头错误：' + name + ' - ' + (err && err.message ? err.message : '')));
+}
+
+async function refreshCameras(){
+  const status = $('camStatus');
+  if(!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices){
+    if(status) status.textContent = '当前浏览器不支持摄像头接口，请改用 Chrome 或 Edge';
+    return [];
+  }
+  try{
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const cams = devices.filter(function(d){ return d.kind === 'videoinput'; });
+    const sel = $('camDevice');
+    if(sel){
+      const current = sel.value;
+      sel.innerHTML = cams.map(function(d, i){
+        return '<option value="' + d.deviceId + '">' + (d.label || ('摄像头 ' + (i + 1))) + '</option>';
+      }).join('');
+      if(current){ sel.value = current; }
+    }
+    if(status){
+      status.textContent = cams.length ? ('发现 ' + cams.length + ' 个摄像头设备') : '未检测到摄像头设备：请确认 Iriun Webcam 已启动并连接手机';
+    }
+    return cams;
+  }catch(e){
+    if(status) status.textContent = camErrorMessage(e);
+    return [];
+  }
+}
+
+async function testCamera(){
+  const status = $('camStatus');
+  try{
+    if(camTestStream){ camTestStream.getTracks().forEach(function(t){ t.stop(); }); camTestStream = null; }
+    const sel = $('camDevice');
+    const deviceId = sel && sel.value;
+    const constraints = deviceId ? { video: { deviceId: { exact: deviceId } } } : { video: true };
+    camTestStream = await navigator.mediaDevices.getUserMedia(constraints);
+    const v = $('camTest');
+    v.srcObject = camTestStream; v.style.display = 'block';
+    await v.play().catch(function(){});
+    if(status) status.textContent = '摄像头测试成功：' + (camTestStream.getVideoTracks()[0].label || '未知设备');
+    await refreshCameras();
+  }catch(e){
+    if(status) status.textContent = camErrorMessage(e);
+    toast(camErrorMessage(e));
+  }
+}
+async function startCamera(){
+  try{
+    if(!$('practiceStudent').value.trim() && state.user && state.user.username){ $('practiceStudent').value = state.user.username; }
+    if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+      $('camStatus').textContent = '当前浏览器不支持摄像头接口，请改用 Chrome 或 Edge';
+      toast('当前浏览器不支持摄像头接口'); return;
+    }
+    const _sel = $('camDevice');
+    const _deviceId = _sel && _sel.value;
+    const _constraints = _deviceId
+      ? { video: { deviceId: { exact: _deviceId }, width: { ideal: 640 }, height: { ideal: 480 } } }
+      : { video: { width: { ideal: 640 }, height: { ideal: 480 } } };
+    if(camTestStream && camTestStream.active && camTestStream.getVideoTracks().length){
+      camStream = camTestStream;
+      camTestStream = null;
+      const tv = $('camTest');
+      if(tv){ tv.srcObject = null; tv.style.display = 'none'; }
+    } else {
+      if(camStream){ camStream.getTracks().forEach(function(t){ t.stop(); }); camStream = null; }
+      camStream = await navigator.mediaDevices.getUserMedia(_constraints);
+    }
+    camSrcVideo = document.createElement('video');
+    camSrcVideo.srcObject = camStream;
+    camSrcVideo.muted = true;
+    camSrcVideo.playsInline = true;
+    camSrcVideo.autoplay = true;
+    camSrcVideo.style.position = 'fixed';
+    camSrcVideo.style.left = '-10000px';
+    camSrcVideo.style.width = '320px';
+    camSrcVideo.style.height = '240px';
+    document.body.appendChild(camSrcVideo);
+    await new Promise(function(resolve){
+      if(camSrcVideo.readyState >= 2 && camSrcVideo.videoWidth > 0){ resolve(); return; }
+      const done = function(){ resolve(); };
+      camSrcVideo.onloadedmetadata = done;
+      camSrcVideo.oncanplay = done;
+      setTimeout(done, 3000);
+    });
+    try{ await camSrcVideo.play(); }catch(e){}
+    await new Promise(function(resolve){ setTimeout(resolve, 800); });
+    if(camSrcVideo.readyState < 2 || !camSrcVideo.videoWidth){
+      $('camStatus').textContent = '摄像头流没有画面：Iriun Webcam 可能被其他程序独占，请关闭其他使用摄像头的软件后重试';
+      toast('摄像头没有输出画面，请关闭其他占用摄像头的程序');
+      stopCamera(false);
+      return;
+    }
+    const vw = camSrcVideo.videoWidth || 0;
+    const vh = camSrcVideo.videoHeight || 0;
+    if(!vw || !vh){ $('camStatus').textContent = '摄像头未返回画面（videoWidth=0），请更换 Chrome/Edge 或检查摄像头设备'; toast('摄像头没有输出画面'); }
+    else { $('camStatus').textContent = '摄像头已就绪 '+vw+'x'+vh+'，正在连接分析服务…'; }
+    const cv = $('camOut');
+    cv.width = vw || 640;
+    cv.height = vh || 480;
+    cv.style.display = 'block';
+    try{
+      const track = camStream.getVideoTracks()[0];
+      $('camDiag').textContent = '设备：' + ((track && track.label) || '未知') + ' · 分辨率：' + vw + 'x' + vh + ' · 状态：等待画面检测…';
+    }catch(e){}
+    const cctx = cv.getContext('2d');
+    cctx.fillStyle = '#111'; cctx.fillRect(0,0,cv.width,cv.height);
+    camLastAnnotated = 0; camFrameCount = 0;
+    const _auth = JSON.parse(localStorage.getItem('vb_auth')||'null'); const _wsProto = (location.protocol === 'https:' ? 'wss://' : 'ws://'); camWs = new WebSocket(_wsProto+location.host+'/ws/camera?token='+encodeURIComponent((_auth&&_auth.token)||''));
+    camWs.onopen = function(){
+      camWs.send(JSON.stringify({
+        action_type: $('practiceAction').value,
+        standard_id: $('practiceStandard').value || null,
+        calibration_label: $('practiceCalibration') ? ($('practiceCalibration').value || null) : null,
+        student: $('practiceStudent').value.trim() || '实时训练'
+      }));
+      $('camStatus').textContent = '连接成功，正在实时分析…';
+      if(!camLoopRunning){ startCameraLoop(); }
+    };
+    camWs.onmessage = function(ev){
+      let d; try{ d = JSON.parse(ev.data); }catch(e){ return; }
+      if(d.type === 'error'){ toast(d.error || '实时分析出错'); return; }
+      if(d.type === 'summary'){ camLastAnnotated = 0; renderCameraSummary(d); stopCamera(false); return; }
+      if(d.frame){
+        const img = new Image();
+        img.onload = function(){
+          const c = $('camOut');
+          const ctx = c.getContext('2d');
+          ctx.drawImage(img, 0, 0, c.width, c.height);
+          camLastAnnotated = Date.now();
+          camFrameCount++;
+          if(camFrameCount === 1){ $('camStatus').textContent = '实时分析中（已接收到后端标注帧）'; }
+        };
+        img.src = 'data:image/jpeg;base64,' + d.frame;
+      }
+      const j = d.pose_judgment || {};
+      const live = d.live || {};
+      const fb = (live.feedback || j.feedback || []).map(function(x){ return '<div>• '+x+'</div>'; }).join('');
+      $('camLive').innerHTML =
+        '<div class="metric"><b>'+(live.current_score||0)+'</b>当前得分</div>'+
+        '<div class="metric"><b>'+(live.action_count||0)+'</b>动作数</div>'+
+        '<div class="metric"><b>'+(live.standard_count||0)+'</b>标准数</div>'+
+        '<div class="metric"><b>'+(live.average_score||0)+'</b>平均分</div>'+
+        '<div class="metric"><b>'+(live.best_score||0)+'</b>最高分</div>'+
+        '<div class="metric"><b>'+(j.person_count||1)+'</b>画面人数</div>'+
+        '<div class="metric"><b>'+(j.person_id!==undefined&&j.person_id!==null?j.person_id:'-')+'</b>主分析ID</div>'+fb;
+      camSendBusy = false;
+    };
+    camWs.onclose = function(){ if(camStream){ stopCamera(false); } };
+    camWs.onerror = function(){ toast('实时分析连接失败，请确认服务已启动'); stopCamera(false); };
+    $('startCam').style.display = 'none';
+    $('stopCam').style.display = 'inline-block';
+    $('camResult').innerHTML = '';
+    setTimeout(function(){
+      if(camSendCount === 0){
+        let trackState = '?';
+        try{ const t = camStream.getVideoTracks()[0]; trackState = t.readyState + (t.muted ? '(muted)' : ''); }catch(e){}
+        $('camStatus').textContent = '前端尚未开始发送画面（readyState=' + (camSrcVideo ? camSrcVideo.readyState : '-') + '，track=' + trackState + '）：请按 Ctrl+F5 强制刷新页面后重试';
+      } else if(camFrameCount === 0){
+        $('camStatus').textContent = '正在等待后端首帧（首次加载模型约需 5–20 秒），当前显示原始摄像头画面';
+      }
+    }, 8000);
+  }catch(e){
+    const msg = camErrorMessage(e);
+    $('camStatus').textContent = msg;
+    toast(msg);
+    await refreshCameras();
+  }
+}
+function startCameraLoop(){
+  if(camLoopRunning){ return; }
+  camLoopRunning = true;
+  const canvas = document.createElement('canvas');
+  canvas.width = 640; canvas.height = 480;
+  const ctx = canvas.getContext('2d');
+  function tick(ts){
+    if(!camLoopRunning){ return; }
+    if(!camWs || camWs.readyState !== WebSocket.OPEN){ requestAnimationFrame(tick); return; }
+    if(!camSrcVideo || camSrcVideo.readyState < 2){
+      if(camFrameCount === 0){ $('camStatus').textContent = '摄像头流暂时没有画面，请关闭其他占用摄像头的程序'; }
+      requestAnimationFrame(tick); return;
+    }
+    if(Date.now() - camLastAnnotated > 3000){
+      const cv = $('camOut');
+      const cctx = cv.getContext('2d');
+      try{ cctx.drawImage(camSrcVideo, 0, 0, cv.width, cv.height); }catch(e){}
+    }
+    if(!camSendBusy && (ts - camLastSend) > 110){
+      camLastSend = ts; camSendBusy = true;
+      try{
+        ctx.drawImage(camSrcVideo, 0, 0, canvas.width, canvas.height);
+        camSendCount++;
+        if(camSendCount === 1 || camSendCount % 30 === 0){
+          try{
+            const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+            let sum = 0, count = 0;
+            for(let i = 0; i < pixels.length; i += 400){ sum += pixels[i] + pixels[i+1] + pixels[i+2]; count += 3; }
+            const mean = count ? (sum / count) : 0;
+            const diag = $('camDiag');
+            if(diag){
+              let trackState = '?';
+              try{ trackState = camStream.getVideoTracks()[0].readyState + (camStream.getVideoTracks()[0].muted ? '(muted)' : ''); }catch(e){}
+              diag.textContent = '设备：' + ((camStream.getVideoTracks()[0] && camStream.getVideoTracks()[0].label) || '未知') +
+                ' · 分辨率：' + camSrcVideo.videoWidth + 'x' + camSrcVideo.videoHeight +
+                ' · readyState：' + camSrcVideo.readyState + ' · track：' + trackState +
+                ' · 亮度：' + mean.toFixed(0);
+            }
+            if(mean < 8){
+              camBlackHits++;
+              if(camBlackHits >= 2){
+                $('camStatus').textContent = '摄像头输出黑帧（亮度 ' + mean.toFixed(0) + '）：请在 Iriun 手机端确认预览正常，或改用手机浏览器直接访问本系统';
+              }
+            } else {
+              camBlackHits = 0;
+              if(camFrameCount === 0){ $('camStatus').textContent = '摄像头画面正常（亮度 ' + mean.toFixed(0) + '），正在等待后端标注帧…'; }
+            }
+          }catch(e){}
+        }
+        const data = canvas.toDataURL('image/jpeg', 0.6).split(',')[1];
+        camWs.send(JSON.stringify({frame:data}));
+      }catch(e){ camSendBusy = false; }
+    }
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+}
+function stopCamera(waitForSummary){
+  if(camStream){ camStream.getTracks().forEach(function(t){ t.stop(); }); camStream = null; }
+  if(camSrcVideo){ try{ camSrcVideo.remove(); }catch(e){} camSrcVideo = null; }
+  const ws = camWs;
+  camWs = null;
+  if(ws){
+    try{
+      if(waitForSummary && ws.readyState === WebSocket.OPEN){
+        $('camStatus').textContent = '正在保存实时训练记录…';
+        ws.send(JSON.stringify({stop:true}));
+        setTimeout(function(){ try{ ws.close(); }catch(e){} }, 5000);
+      } else { ws.close(); }
+    }catch(e){}
+  }
+  camLoopRunning = false;
+  const cv = $('camOut');
+  const ctx = cv.getContext('2d');
+  ctx.fillStyle = '#111'; ctx.fillRect(0, 0, cv.width, cv.height);
+  $('startCam').style.display = '';
+  $('stopCam').style.display = 'none';
+}
+function renderCameraSummary(d){
+  const s = d.summary || {};
+  let html = '<h4 style="margin:10px 0">实时训练已保存</h4>';
+  if(d.video_url){ html += '<video src="'+d.video_url+'" controls></video>'; }
+  html += '<div class="metric"><b>'+(s.average_score||0)+'</b>平均分</div>'+
+          '<div class="metric"><b>'+(s.best_score||0)+'</b>最高分</div>'+
+          '<div class="metric"><b>'+(s.action_count||0)+'</b>动作数</div>'+
+          '<div class="metric"><b>'+(s.standard_count||0)+'</b>标准数</div>';
+  if(d.session_id){ html += '<div>训练记录编号：#'+d.session_id+'，已写入“我的训练记录”。</div>'; }
+  else { html += '<div class="empty">本次没有采集到有效帧</div>'; }
+  $('camResult').innerHTML = html;
+  $('camStatus').textContent = '已停止';
+  loadHistory();
+}
+$('startCam').onclick = startCamera;
+$('stopCam').onclick = function(){ stopCamera(true); };
+
+// ---------- 标准学习 ----------
+async function loadStudy(){
+  const list=await api('/api/standards');
+  $('studyList').innerHTML=list.map(s=>{
+    const v=s.video_path?'<video src="/media/'+s.video_path+'" controls preload="metadata" style="max-height:220px"></video>':'<div class="empty">暂无示范视频</div>';
+    return '<div style="border:1px solid #e0e7ef;border-radius:10px;padding:12px;margin-bottom:10px"><b>'+s.name+'</b>（'+ACTION[s.action_type]+'）<div>'+v+'</div><div style="color:#777">'+s.description+'</div></div>';
+  }).join('') || '<div class="empty">暂无标准动作</div>';
+  // 学生点开单个做慢放
+  $('studyPlayer').innerHTML=list.map((s,idx)=>{
+    const keys=(s.params&&s.params.keyframes)||[];
+    const khtml=keys.map(k=>'<button class="speed-btn" onclick="seekStd('+idx+','+k.time+')">'+k.time+'s '+k.label+'</button>').join('');
+    return '<div style="border-top:1px solid #eee;padding:10px 0"><b>'+s.name+'</b><video id="studyV'+idx+'" src="'+ (s.video_path?'/media/'+s.video_path:'') +'" controls preload="metadata" style="max-height:320px"></video><div>播放速度：<button class="speed-btn" onclick="setRate('+idx+',1)">1x</button><button class="speed-btn" onclick="setRate('+idx+',0.5)">0.5x 慢放</button><button class="speed-btn" onclick="setRate('+idx+',0.25)">0.25x 慢放</button></div><div>关键帧：'+(khtml||'<span style="color:#999">由教练添加</span>')+'</div></div>';
+  }).join('') || '<div class="empty">暂无标准视频，请先让教练上传</div>';
+}
+function setRate(idx,rate){ const v=$('studyV'+idx); if(v){v.playbackRate=rate;} }
+function seekStd(idx,t){ const v=$('studyV'+idx); if(v){v.currentTime=t; v.play();} }
+
+// ---------- 历史 ----------
+async function loadHistory(){
+  const name=(state.user&&state.user.role==='student')?state.user.username:'';
+  const list=await api('/api/sessions?student='+encodeURIComponent(name));
+  $('historyList').innerHTML=list.length?('<table><tr><th>ID</th><th>动作</th><th>时间</th><th>平均分</th><th>动作数</th><th>标准数</th><th></th></tr>'+list.map(s=>'<tr><td>'+s.id+'</td><td>'+(ACTION[s.action_type]||s.action_type)+'</td><td>'+s.created_at+'</td><td>'+s.avg_score+'</td><td>'+s.action_count+'</td><td>'+s.standard_count+'</td><td><button class="btn small" onclick="showSession('+s.id+')">查看</button></td></tr>').join('')+'</table>') : '<div class="empty">暂无训练记录，先去练习一次吧</div>';
+}
+async function showSession(id){
+  const s=await api('/api/sessions/'+id);
+  let media='';
+  if(s.out_path){
+    const rel=s.out_path.replace(/\\/g,'/');
+    const idx=rel.lastIndexOf('results/');
+    const url='/'+rel.substring(idx);
+    media=(url.endsWith('.mp4')||url.endsWith('.webm'))?'<video src="'+url+'" controls></video>':'<img src="'+url+'">';
+  }
+  const att=(s.attempts||[]).map((a,i)=>'<div class="feedback"><b>动作 '+(i+1)+'</b> 得分 '+a.avg_score+' · '+(a.is_standard?'标准':'待改进')+' · '+a.frames+' 帧</div>'+(a.feedback||[]).map(x=>'<div style="padding-left:16px">• '+x+'</div>').join('')).join('');
+  $('historyDetail').innerHTML='<h4>训练 #'+s.id+'</h4>'+media+'<div class="metric"><b>'+s.avg_score+'</b>平均分</div><div class="metric"><b>'+s.best_score+'</b>最高分</div><div class="metric"><b>'+(s.action_count||0)+'</b>动作数</div>'+(att||'<div class="empty">该记录没有结算到具体动作区间</div>');
+}
+
+// ---------- 教练：标准库 ----------
+async function loadCoachStd(){
+  const list=await api('/api/standards');
+  $('coachStdList').innerHTML=list.map(s=>'<div style="border:1px solid #e0e7ef;border-radius:10px;padding:12px;margin-bottom:10px"><div class="row"><b style="flex:1">'+s.name+'（'+ACTION[s.action_type]+'）</b><button class="btn small" onclick="openStdEdit('+s.id+')">编辑</button><button class="btn small red" onclick="delStd('+s.id+')">删除</button></div>'+(s.video_path?'<video src="/media/'+s.video_path+'" controls preload="metadata" style="max-height:200px"></video>':'<span class="empty">未上传示范视频</span>')+'<div style="color:#666;font-size:13px;margin-top:4px">'+s.description+'</div></div>').join('');
+}
+function defaultParams(action){ const v=ACTION[action]; const base={left_elbow:[160,180],right_elbow:[160,180],left_knee:[100,150],right_knee:[100,150],hip_height_ratio:[0.3,0.7],weights:{elbow:.4,knee:.4,hip:.2}}; return base; }
+async function openStdEdit(id){
+  $('stdModalTitle').textContent=id?'编辑标准动作':'新建标准动作'; $('stdId').value=id||'';
+  fillActionSelects();
+  let s=null; if(id){ s=await api('/api/standards/'+id); $('stdName').value=s.name; $('stdAction').value=s.action_type; $('stdDesc').value=s.description||''; $('stdNote').value=s.note||''; }
+  else{ $('stdName').value=''; $('stdAction').value='dig'; $('stdDesc').value=''; $('stdNote').value=''; }
+  $('stdParams').value=JSON.stringify((s&&s.params)||defaultParams('dig'),null,2);
+  $('stdMediaPreview').innerHTML=s&&s.video_path?'<video src="/media/'+s.video_path+'" controls preload="metadata" style="max-height:180px"></video>':'';
+  $('stdModal').classList.add('show');
+}
+async function saveStd(){
+  const fd=new FormData(); fd.append('name',$('stdName').value.trim()); fd.append('action_type',$('stdAction').value); fd.append('description',$('stdDesc').value); fd.append('note',$('stdNote').value);
+  let params; try{ params=JSON.parse($('stdParams').value); }catch(e){ return toast('标准参数 JSON 格式错误'); }
+  fd.append('params_json',JSON.stringify(params));
+  const vf=$('stdVideo').files[0]; if(vf) fd.append('video',vf);
+  const cf=$('stdCover').files[0]; if(cf) fd.append('cover',cf);
+  const id=$('stdId').value;
+  try{ if(id){ await api('/api/standards/'+id,{method:'PUT',body:fd}); } else { await api('/api/standards',{method:'POST',body:fd}); }
+    closeModal('stdModal'); loadCoachStd(); loadStudy(); toast('已保存');
+  }catch(e){ toast(e.message); }
+}
+async function delStd(id){ if(!confirm('确认删除该标准动作？'))return; try{ await api('/api/standards/'+id,{method:'DELETE'}); loadCoachStd(); loadStudy(); toast('已删除'); }catch(e){ toast(e.message); } }
+function addKeyframeBtn(){}
+
+// ---------- 报表 ----------
+async function loadReport(){
+  const o=await api('/api/reports/overview');
+  const top=(o.top_feedback||[]).map(x=>'<div class="feedback">'+x.text+'（'+x.count+' 次）</div>').join('');
+  $('reportOverview').innerHTML='<div class="metric"><b>'+o.student_count+'</b>学生</div><div class="metric"><b>'+o.session_count+'</b>训练次数</div><div class="metric"><b>'+o.action_total+'</b>总动作</div><div class="metric"><b>'+o.normative_rate+'%</b>规范率</div><div class="metric"><b>'+o.avg_score+'</b>平均分</div><h4>常见问题 TOP</h4>'+top;
+  const students=await api('/api/students');
+  $('reportStudents').innerHTML=students.length?'<table><tr><th>学生</th><th>训练次数</th><th>动作总数</th><th>标准数</th><th>规范率</th><th>平均分</th><th></th></tr>'+students.map(s=>'<tr><td>'+s.name+'</td><td>'+s.session_count+'</td><td>'+s.action_total+'</td><td>'+s.standard_total+'</td><td>'+s.normative_rate+'%</td><td>'+s.avg_score+'</td><td><button class="btn small" onclick="showStudentReport(\''+encodeURIComponent(s.name)+'\')">详情</button></td></tr>').join('')+'</table>':'<div class="empty">暂无学生训练数据</div>';
+}
+async function showStudentReport(name){
+  const r=await api('/api/reports/student/'+name);
+  $('reportStudentDetail').innerHTML='<h4>'+r.student+' 训练报告</h4><div class="metric"><b>'+r.normative_rate+'%</b>规范率</div><div class="metric"><b>'+r.avg_score+'</b>平均分</div><div class="metric"><b>'+r.action_total+'</b>动作总数</div><table><tr><th>ID</th><th>动作</th><th>时间</th><th>动作数/标准数</th><th>平均分</th></tr>'+(r.sessions||[]).map(s=>'<tr><td>'+s.id+'</td><td>'+ACTION[s.action_type]+'</td><td>'+s.created_at+'</td><td>'+s.action_count+' / '+s.standard_count+'</td><td>'+s.avg_score+'</td></tr>').join('')+'</table>';
+}
+
+// ---------- 标定 ----------
+$('calibImage').onchange=function(){ const f=this.files[0]; if(!f)return; const url=URL.createObjectURL(f); const img=new Image(); img.onload=()=>{ calibImg=img; const cv=$('calibCanvas'); cv.width=img.width; cv.height=img.height; calibCtx=cv.getContext('2d'); calibCtx.drawImage(img,0,0); calibPoints={}; drawCalib(); }; img.src=url; };
+$('calibCanvas').onclick=function(e){ if(!calibImg)return toast('先上传场地图片'); const cv=this; const rect=cv.getBoundingClientRect(); const x=Math.round((e.clientX-rect.left)*(cv.width/rect.width)); const y=Math.round((e.clientY-rect.top)*(cv.height/rect.height)); const keys=['far_left','far_right','near_left','near_right']; const empty=keys.find(k=>!calibPoints[k]); if(empty){ calibPoints[empty]={x,y}; drawCalib(); if(keys.every(k=>calibPoints[k])) toast('四个端点已标完，可保存'); } };
+function drawCalib(){ if(!calibCtx)return; const cv=$('calibCanvas'); calibCtx.drawImage(calibImg,0,0); const colors={far_left:'#ff5252',far_right:'#ff5252',near_left:'#4caf50',near_right:'#4caf50'}; Object.entries(calibPoints).forEach(([k,p])=>{ calibCtx.fillStyle=colors[k]||'#ff0'; calibCtx.beginPath(); calibCtx.arc(p.x,p.y,8,0,Math.PI*2); calibCtx.fill(); calibCtx.font='18px sans-serif'; calibCtx.fillText(k,p.x+10,p.y-10); }); if(calibPoints.far_left&&calibPoints.far_right&&calibPoints.near_left&&calibPoints.near_right){ calibCtx.strokeStyle='#ffd54f'; calibCtx.lineWidth=3; [['far_left','far_right'],['far_right','near_right'],['near_right','near_left'],['near_left','far_left']].forEach(([a,b])=>{const p=calibPoints[a],q=calibPoints[b];calibCtx.beginPath();calibCtx.moveTo(p.x,p.y);calibCtx.lineTo(q.x,q.y);calibCtx.stroke();}); } }
+async function saveCalibration(){ if(!calibImg)return toast('请先上传场地图片'); try{ await api('/api/calibration',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({label:($('calibLabel')?$('calibLabel').value:'viewA'),points:calibPoints,view_index:($('calibLabel')?($('calibLabel').value==='viewB'?1:0):0)})}); toast('标定已保存'); loadCalibList(); }catch(e){ toast(e.message); } }
+async function loadCalibList(){ try{ const list=await api('/api/calibrations'); $('calibSaved').innerHTML=list.map(c=>'<div>已保存：'+c.label+' · '+c.updated_at+'（'+(c.points?Object.keys(c.points).length:0)+' 点）</div>').join(''); }catch(e){} }
+
+// ---------- 页面初始化 ----------
+$('practiceStudent').value = state.user&&state.user.role==='student' ? state.user.username : '';
+if(state.user){ $('userBadge').textContent=(state.user.role==='coach'?'教练：':'学生：')+state.user.username; }
+fillActionSelects(); fileInputs(); if(window.refreshCameras) refreshCameras().catch(function(){}); $('analyzeVideoBtn').onclick=analyzeVideo; $('analyzeImageBtn').onclick=analyzeImage; loadPracticeOptions().catch(()=>{}); loadStudy().catch(()=>{}); loadHistory().catch(()=>{});
+document.querySelector('.user').innerHTML += '<span onclick="logout()" style="margin-left:12px;cursor:pointer">退出</span>';
+</script>
+<script src="extra_features.js"></script>
+<script src="auth_features.js"></script>
+<script src="dataset_features.js"></script>
+</body>
+</html>
