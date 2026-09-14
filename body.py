@@ -28,6 +28,24 @@ def get_chinese_font():
 
 CHINESE_FONT = get_chinese_font()
 
+_FONT_CACHE = {}
+
+
+def _get_font(font_size):
+    """按字号缓存字体对象（每帧重复加载字体非常耗时）。"""
+    if not CHINESE_FONT:
+        return ImageFont.load_default()
+    key = int(font_size)
+    font = _FONT_CACHE.get(key)
+    if font is None:
+        try:
+            font = ImageFont.truetype(CHINESE_FONT, key)
+        except Exception:
+            font = ImageFont.load_default()
+        _FONT_CACHE[key] = font
+    return font
+
+
 def put_chinese_texts(img, items):
     """一次 PIL 往返绘制多条中文文本。
 
@@ -40,13 +58,7 @@ def put_chinese_texts(img, items):
     img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
     draw = ImageDraw.Draw(img_pil)
     for text, position, font_size, color in items:
-        if CHINESE_FONT:
-            try:
-                font = ImageFont.truetype(CHINESE_FONT, font_size)
-            except Exception:
-                font = ImageFont.load_default()
-        else:
-            font = ImageFont.load_default()
+        font = _get_font(font_size)
         draw.text(position, text, font=font, fill=(color[2], color[1], color[0]))
     return cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
 

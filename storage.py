@@ -51,6 +51,8 @@ def _connect(db_path: Optional[Path] = None) -> sqlite3.Connection:
     conn = sqlite3.connect(str(path), timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")   # 并发写入时最多等 5 秒，避免直接报 database is locked
+    conn.execute("PRAGMA synchronous=NORMAL")  # WAL 模式下兼顾安全与速度
     return conn
 def _safe_filename(name: str) -> str:
     name = Path(name).name
@@ -161,6 +163,12 @@ def init_db(db_path: Optional[Path] = None) -> None:
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
+                CREATE INDEX IF NOT EXISTS idx_sessions_owner ON training_sessions(owner_username);
+                CREATE INDEX IF NOT EXISTS idx_sessions_student ON training_sessions(student);
+                CREATE INDEX IF NOT EXISTS idx_sessions_created ON training_sessions(created_at);
+                CREATE INDEX IF NOT EXISTS idx_attempts_session ON session_attempts(session_id);
+                CREATE INDEX IF NOT EXISTS idx_standards_action ON standards(action_type);
+                CREATE INDEX IF NOT EXISTS idx_dataset_items ON dataset_items(dataset_id);
                 CREATE TABLE IF NOT EXISTS calibrations (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     label TEXT NOT NULL UNIQUE,

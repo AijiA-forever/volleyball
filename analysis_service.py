@@ -30,11 +30,12 @@ class _FrameRecorder:
     异常安全：写盘失败时不会让 close() 永久阻塞，失败信息会记录到 failure。
     """
 
-    def __init__(self, writer, max_queue: int = 60) -> None:
+    def __init__(self, writer, max_queue: int = 60, drop: bool = True) -> None:
         self._writer = writer
         self._queue: queue.Queue = queue.Queue(maxsize=max_queue)
         self._dropped = 0
         self._closed = False
+        self.drop = drop
         self.failure = None
         self._thread = threading.Thread(target=self._drain, daemon=True)
         self._thread.start()
@@ -43,10 +44,14 @@ class _FrameRecorder:
         if self._closed or self.failure:
             self._dropped += 1
             return
-        try:
-            self._queue.put_nowait(frame)
-        except queue.Full:
-            self._dropped += 1
+        if self.drop:
+            try:
+                self._queue.put_nowait(frame)
+            except queue.Full:
+                self._dropped += 1
+        else:
+            # 离线视频：宁可等编码，也不丢帧
+            self._queue.put(frame)
 
     def _drain(self) -> None:
         while True:
@@ -386,9 +391,13 @@ class AnalysisService:
             writer = None
             out_path = None
             out_name = None
+            try:
+                width_cap = max(320, int(os.environ.get("VB_VIDEO_WIDTH", "720")))
+            except (TypeError, ValueError):
+                width_cap = 720
             out_width, out_height = width, height
-            if width > 960:
-                scale = 960.0 / width
+            if width > width_cap:
+                scale = float(width_cap) / width
                 out_width = int(width * scale) // 2 * 2
                 out_height = int(height * scale) // 2 * 2
             if write_video:
@@ -405,6 +414,9 @@ class AnalysisService:
                 if writer is None:
                     raise RuntimeError("当前环境没有可用的视频编码器")
                 out_name = out_path.name
+            recorder = _FrameRecorder(writer, drop=False) if writer is not None else None
+            encoding_dropped = 0
+            encoding_error = None
             frame_count = 0
             frame_scores: List[float] = []
             try:
@@ -417,11 +429,14 @@ class AnalysisService:
                         frame, action_type, criteria, calibration
                     )
                     frame_scores.append(float(judgment.get("total_score", 0) or 0) if judgment else 0.0)
-                    if writer is not None:
-                        writer.write(cv2.resize(annotated, (out_width, out_height), interpolation=cv2.INTER_AREA))
+                    if recorder is not None:
+                        recorder.write(cv2.resize(annotated, (out_width, out_height), interpolation=cv2.INTER_AREA))
             finally:
                 cap.release()
-                if writer is not None:
+                if recorder is not None:
+                    encoding_dropped = recorder.close()
+                    encoding_error = recorder.failure
+                elif writer is not None:
                     writer.release()
             summary = analyzer.action_session.get_summary()
             summary.update(analyzer.tracking_summary())
@@ -487,6 +502,8 @@ class AnalysisService:
                     "multi_person_frames": summary.get("multi_person_frames", 0),
                     "primary_ids": summary.get("primary_ids", []),
                     "calibration_label": calibration_label,
+                    "encoding_dropped_frames": encoding_dropped,
+                    "encoding_error": encoding_error,
                     "feedback": attempts[-1]["feedback"] if attempts else [],
                 },
                 "attempts": attempts,

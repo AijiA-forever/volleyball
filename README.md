@@ -110,6 +110,7 @@ C:\miniconda\envs\volleyball_analytics\python.exe -m uvicorn main:app --host 127
 | `VB_BALL_CONF` | 0.5 | 排球检测置信度阈值 |
 | `VB_BALL_INTERVAL` | 1 | 实时分析每 N 帧检测一次排球。默认 1 保证动作计数准确；设为 2 可提速，但实测会明显少算动作 |
 | `VB_BALL_INTERVAL_VIDEO` | 1 | 离线视频分析每 N 帧检测一次排球（默认 1，精度优先） |
+| `VB_VIDEO_WIDTH` | 720 | 离线结果视频的输出宽度上限；调小更快、文件更小 |
 | `VB_DEBUG_LOG` | 0 | 设为 1 打开逐帧调试打印 |
 
 示例（CPU 且想更快）：
@@ -120,3 +121,16 @@ set VB_BALL_IMGSZ=480
 set VB_BALL_INTERVAL=1
 python -m uvicorn main:app --host 0.0.0.0 --port 8000
 ```
+
+## 原理与创新
+
+- [系统原理与创新点论述.md](docs/系统原理与创新点论述.md)
+
+## 系统优化说明
+
+- 离线视频分析：标注视频后台线程异步写盘（不丢帧），编码与推理并行；输出宽度默认 720，可用 VB_VIDEO_WIDTH 调整；
+- 实时分析：二进制帧传输、逐帧推理线程池、服务端 20ms 限速、录像异步写盘；
+- 中文字体按字号缓存，避免逐帧重复加载；
+- SQLite 启用 WAL + busy_timeout(5s) + 常用查询索引，数据量大时更稳；
+- 训练产物目录 `models/trained/` 不进入版本库；
+- 提供 `tools/smoke_test.py` 一键冒烟测试。

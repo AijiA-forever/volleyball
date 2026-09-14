@@ -312,7 +312,7 @@ function renderVideoResult(r){
     fbHtml+='<div class="feedback"><b>第 '+(i+1)+' 个动作</b>：得分 '+a.avg_score+'，'+(a.is_standard?'标准 ✓':'需改进 ✗')+'，'+a.frames+' 帧</div>';
     (a.feedback||[]).forEach(x=>fbHtml+='<div style="padding-left:16px">• '+x+'</div>');
   });
-  $('videoResult').innerHTML='<h4 style="margin:10px 0">分析结果</h4><video src="'+r.video_url+'" controls></video><div class="metric"><b>'+sum.average_score+'</b>平均分</div><div class="metric"><b>'+(sum.best_score!==undefined?sum.best_score:0)+'</b>最高分</div><div class="metric"><b>'+sum.action_count+'</b>动作数</div><div class="metric"><b>'+sum.standard_count+'</b>标准数</div><div class="metric"><b>'+sum.total_frames+'</b>总帧数</div><div class="metric"><b>'+(sum.max_person_count||1)+'</b>画面最多人数</div><div class="metric"><b>'+((sum.primary_ids||[]).join(',')||'-')+'</b>主分析ID</div><canvas id="scoreChart"></canvas>'+fbHtml; drawScoreChart(sum.score_curve);
+  $('videoResult').innerHTML='<h4 style="margin:10px 0">分析结果</h4><video src="'+r.video_url+'" controls></video><div class="metric"><b>'+sum.average_score+'</b>平均分</div><div class="metric"><b>'+(sum.best_score!==undefined?sum.best_score:0)+'</b>最高分</div><div class="metric"><b>'+sum.action_count+'</b>动作数</div><div class="metric"><b>'+sum.standard_count+'</b>标准数</div><div class="metric"><b>'+sum.total_frames+'</b>总帧数</div><div class="metric"><b>'+(sum.max_person_count||1)+'</b>画面最多人数</div><div class="metric"><b>'+((sum.primary_ids||[]).join(',')||'-')+'</b>主分析ID</div><div class="metric"><b>'+(sum.encoding_dropped_frames||0)+'</b>编码丢帧</div><canvas id="scoreChart"></canvas>'+(sum.encoding_error?'<div style="color:#d1242f">视频编码错误：'+sum.encoding_error+'</div>':'')+fbHtml; drawScoreChart(sum.score_curve);
 }
 
 function drawScoreChart(points){
