@@ -501,11 +501,11 @@ async function startCamera(){
       $('camStatus').textContent = '连接成功，正在实时分析…';
       if(!camLoopRunning){ startCameraLoop(); }
     };
+    camWs.binaryType = 'blob';
     camWs.onmessage = function(ev){
-      let d; try{ d = JSON.parse(ev.data); }catch(e){ return; }
-      if(d.type === 'error'){ toast(d.error || '实时分析出错'); return; }
-      if(d.type === 'summary'){ camLastAnnotated = 0; renderCameraSummary(d); stopCamera(false); return; }
-      if(d.frame){
+      // 二进制消息 = 标注图像（JPEG），直接绘制
+      if(ev.data instanceof Blob){
+        const url = URL.createObjectURL(ev.data);
         const img = new Image();
         img.onload = function(){
           const c = $('camOut');
@@ -514,9 +514,15 @@ async function startCamera(){
           camLastAnnotated = Date.now();
           camFrameCount++;
           if(camFrameCount === 1){ $('camStatus').textContent = '实时分析中（已接收到后端标注帧）'; }
+          URL.revokeObjectURL(url);
         };
-        img.src = 'data:image/jpeg;base64,' + d.frame;
+        img.src = url;
+        return;
       }
+      // 文本消息 = 元数据（JSON）
+      let d; try{ d = JSON.parse(ev.data); }catch(e){ return; }
+      if(d.type === 'error'){ toast(d.error || '实时分析出错'); return; }
+      if(d.type === 'summary'){ camLastAnnotated = 0; renderCameraSummary(d); stopCamera(false); return; }
       const j = d.pose_judgment || {};
       const live = d.live || {};
       const fb = (live.feedback || j.feedback || []).map(function(x){ return '<div>• '+x+'</div>'; }).join('');
@@ -639,7 +645,9 @@ function renderCameraSummary(d){
   html += '<div class="metric"><b>'+(s.average_score||0)+'</b>平均分</div>'+
           '<div class="metric"><b>'+(s.best_score||0)+'</b>最高分</div>'+
           '<div class="metric"><b>'+(s.action_count||0)+'</b>动作数</div>'+
-          '<div class="metric"><b>'+(s.standard_count||0)+'</b>标准数</div>';
+          '<div class="metric"><b>'+(s.standard_count||0)+'</b>标准数</div>'+
+          '<div class="metric"><b>'+(s.dropped_frames||0)+'</b>录制丢帧</div>';
+  if(s.recorder_error){ html += '<div style="color:#d1242f">录像错误：'+s.recorder_error+'</div>'; }
   if(d.session_id){ html += '<div>训练记录编号：#'+d.session_id+'，已写入“我的训练记录”。</div>'; }
   else { html += '<div class="empty">本次没有采集到有效帧</div>'; }
   $('camResult').innerHTML = html;
