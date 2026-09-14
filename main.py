@@ -579,7 +579,10 @@ async def websocket_camera(ws: WebSocket, token: str = ""):
                 # 二进制帧：收到的就是 JPEG 字节流，省掉 base64 解码
                 payload = message["bytes"]
             else:
-                data = json.loads(message.get("text") or "{}")
+                try:
+                    data = json.loads(message.get("text") or "{}")
+                except Exception:
+                    continue
                 if data.get("stop"):
                     break
                 frame_b64 = data.get("frame")
@@ -614,7 +617,7 @@ async def websocket_camera(ws: WebSocket, token: str = ""):
     finally:
         if started:
             try:
-                final = service.stop_realtime()
+                final = await run_in_threadpool(service.stop_realtime)
                 if final is not None:
                     await ws.send_json({"type": "summary", **final})
             except Exception:

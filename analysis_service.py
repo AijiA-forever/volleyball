@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """整合版分析服务：把旧半成品的视觉分析引擎与 SQLite 记录、标准动作库对接。"""
 from __future__ import annotations
+import os
 import queue
 import re
 import threading
@@ -24,16 +25,24 @@ def _safe_dir(name: str) -> str:
 
 
 class _FrameRecorder:
-    """后台线程写盘：逐帧只做入队，视频编码不再占用实时推理的关键路径。"""
+    """后台线程写盘：逐帧只做入队，视频编码不占用实时推理关键路径。
+
+    异常安全：写盘失败时不会让 close() 永久阻塞，失败信息会记录到 failure。
+    """
 
     def __init__(self, writer, max_queue: int = 60) -> None:
         self._writer = writer
         self._queue: queue.Queue = queue.Queue(maxsize=max_queue)
         self._dropped = 0
+        self._closed = False
+        self.failure = None
         self._thread = threading.Thread(target=self._drain, daemon=True)
         self._thread.start()
 
     def write(self, frame) -> None:
+        if self._closed or self.failure:
+            self._dropped += 1
+            return
         try:
             self._queue.put_nowait(frame)
         except queue.Full:
@@ -45,16 +54,32 @@ class _FrameRecorder:
             try:
                 if item is None:
                     return
-                self._writer.write(item)
+                if self.failure:
+                    continue
+                try:
+                    self._writer.write(item)
+                except Exception as exc:
+                    self.failure = f"{type(exc).__name__}: {exc}"
+                    print(f"[录像] 写入失败，后续帧丢弃：{exc}", flush=True)
             finally:
                 self._queue.task_done()
 
-    def close(self) -> int:
-        """等队列写完再释放编码器，返回写盘期间被丢弃的帧数。"""
+    def close(self, timeout: float = 15.0) -> int:
+        self._closed = True
+        # 先等队列被消费完（失败时 _drain 仍会取出并 task_done，不会死锁）
         self._queue.join()
-        self._queue.put(None)
-        self._thread.join(timeout=10)
-        self._writer.release()
+        try:
+            self._queue.put_nowait(None)
+        except queue.Full:
+            try:
+                self._queue.put(None, timeout=1)
+            except queue.Full:
+                pass
+        self._thread.join(timeout=timeout)
+        try:
+            self._writer.release()
+        except Exception:
+            pass
         return self._dropped
 
 
@@ -180,6 +205,10 @@ class AnalysisService:
             analyzer.tracker.reset()
             analyzer.frame_person_counts = []
             analyzer.primary_id_history = []
+            try:
+                analyzer.ball_interval = max(1, int(os.environ.get("VB_BALL_INTERVAL", "2")))
+            except (TypeError, ValueError):
+                analyzer.ball_interval = 2
             self._rt = {
                 "owner": student or "实时训练",
                 "calibration": self.resolve_calibration(calibration_label),
@@ -253,8 +282,10 @@ class AnalysisService:
         if rt is None:
             return None
         dropped_frames = 0
+        recorder_error = None
         if rt.get("recorder") is not None:
             dropped_frames = rt["recorder"].close()
+            recorder_error = rt["recorder"].failure
             rt["recorder"] = None
             rt["writer"] = None
         analyzer = self._get_analyzer()
@@ -283,6 +314,7 @@ class AnalysisService:
             "started_at": rt["started_at"],
             "duration_frames": rt["frame_count"],
             "dropped_frames": dropped_frames,
+            "recorder_error": recorder_error,
             "score_curve": [round(float(v), 1) for v in scores],
         })
         session_id = None
@@ -308,6 +340,7 @@ class AnalysisService:
             "summary": {
                 "total_frames": rt["frame_count"],
                 "dropped_frames": dropped_frames,
+                "recorder_error": recorder_error,
                 "action_count": int(summary.get("action_count") or 0),
                 "standard_count": int(summary.get("standard_count") or 0),
                 "average_score": round(avg_score, 2),
@@ -340,6 +373,10 @@ class AnalysisService:
             analyzer.tracker.reset()
             analyzer.frame_person_counts = []
             analyzer.primary_id_history = []
+            try:
+                analyzer.ball_interval = max(1, int(os.environ.get("VB_BALL_INTERVAL_VIDEO", "1")))
+            except (TypeError, ValueError):
+                analyzer.ball_interval = 1
             criteria = self.resolve_criteria(action_type, standard_id)
             calibration = self.resolve_calibration(calibration_label)
             cap = cv2.VideoCapture(str(input_path))
