@@ -23,6 +23,7 @@ from typing import List, Optional
 import cv2
 import numpy as np
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -571,17 +572,28 @@ async def websocket_camera(ws: WebSocket, token: str = ""):
         started = True
         await ws.send_json({"type": "started", "student": student, "action_type": action_type})
         while True:
-            data = json.loads(await ws.receive_text())
-            if data.get("stop"):
+            message = await ws.receive()
+            if message.get("type") == "websocket.disconnect":
                 break
-            frame_b64 = data.get("frame")
-            if not frame_b64:
+            if message.get("bytes") is not None:
+                # 二进制帧：收到的就是 JPEG 字节流，省掉 base64 解码
+                payload = message["bytes"]
+            else:
+                data = json.loads(message.get("text") or "{}")
+                if data.get("stop"):
+                    break
+                frame_b64 = data.get("frame")
+                if not frame_b64:
+                    continue
+                payload = base64.b64decode(frame_b64)
+            if not payload:
                 continue
-            buf = np.frombuffer(base64.b64decode(frame_b64), np.uint8)
+            buf = np.frombuffer(payload, np.uint8)
             frame = cv2.imdecode(buf, cv2.IMREAD_COLOR)
             if frame is None:
                 continue
-            result = service.handle_realtime_frame(frame, action_type, standard_id)
+            # 逐帧推理是 CPU 密集的同步调用，放线程池执行，避免阻塞事件循环
+            result = await run_in_threadpool(service.handle_realtime_frame, frame, action_type, standard_id)
             annotated = result["annotated"]
             judgment = result["judgment"]
             ok, jpg = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 75])

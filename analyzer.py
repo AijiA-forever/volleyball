@@ -20,8 +20,54 @@ from volleyball_detect import (
 )
 from ultralytics import YOLO
 from pathlib import Path
+import os
 import torch
 import numpy as np
+
+
+def _env_int(name, default):
+    """读取整数环境变量，非法值回退默认值。"""
+    try:
+        return int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_float(name, default):
+    """读取浮点环境变量，非法值回退默认值。"""
+    try:
+        return float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+# 实时性能相关配置：默认值与原行为一致（640 / 0.3 / 0.5），可用环境变量覆盖
+POSE_IMGSZ = _env_int("VB_POSE_IMGSZ", 640)
+POSE_CONF = _env_float("VB_POSE_CONF", 0.3)
+BALL_IMGSZ = _env_int("VB_BALL_IMGSZ", 640)
+BALL_CONF = _env_float("VB_BALL_CONF", 0.5)
+# 每 N 帧执行一次排球检测。实测 N=2 时动作数与得分与原实现一致；N>=3 会因球轨迹外推误差
+# 累积导致动作区间被截断（同一素材动作数降为 0），因此默认取 2。
+BALL_INTERVAL = max(1, _env_int("VB_BALL_INTERVAL", 2))
+DEBUG_LOG = os.environ.get("VB_DEBUG_LOG") == "1"        # 逐帧/区间调试打印开关
+
+
+def _select_device():
+    """默认优先使用 GPU：torch 有可用的 CUDA 时用 0 号卡，否则回退 CPU。
+
+    可用 VB_DEVICE 显式指定（cpu / 0 / cuda:0），便于排障与对比测试。
+    """
+    override = os.environ.get("VB_DEVICE", "").strip()
+    if override:
+        lowered = override.lower()
+        device = 0 if lowered == "gpu" else (int(override) if override.isdigit() else override)
+    else:
+        device = 0 if torch.cuda.is_available() else "cpu"
+    if device != "cpu" and not torch.cuda.is_available():
+        print("[设备] 指定的 GPU 不可用（当前 torch 没有可用的 CUDA），回退 CPU")
+        return "cpu"
+    return device
+
 
 class VolleyballActionAnalyzer:
     """
@@ -33,7 +79,14 @@ class VolleyballActionAnalyzer:
         self.pose_model = YOLO(str(Path(__file__).resolve().parent / "pose_best.pt"))
         self.volleyball_model = None
         self.detect_volleyball_flag = detect_volleyball
-        self.device = 0 if torch.cuda.is_available() else 'cpu'
+        self.device = _select_device()
+        self.half = self.device != 'cpu'
+        if self.device == 'cpu':
+            print(f"[设备] CPU 推理（torch {torch.__version__}，未检测到可用的 CUDA 版 torch）", flush=True)
+        else:
+            print(f"[设备] GPU 推理：{torch.cuda.get_device_name(0)} "
+                  f"（torch {torch.__version__}，CUDA {torch.version.cuda}，FP16={self.half}）", flush=True)
+        self.ball_frame_index = 0  # 排球检测抽帧计数
         self.last_valid_kpts = None
         self.tracker = SimpleTracker()
         self.calibration_H = None
@@ -97,9 +150,11 @@ class VolleyballActionAnalyzer:
 
         return (int(predicted_x), int(predicted_y))
 
-    def _interpolate_volleyball(self, vb_dets):
+    def _interpolate_volleyball(self, vb_dets, detected=True):
         """
         时序插值与动量保留
+        :param detected: 本帧是否真正执行了检测；抽帧跳过的帧传 False，
+                         不计入丢帧容忍预算（否则抽帧会截断球的连续轨迹）
         返回: (interpolated_det, is_interpolated)
         """
         if vb_dets and len(vb_dets) > 0:
@@ -116,7 +171,8 @@ class VolleyballActionAnalyzer:
 
         else:
             # 当前帧未检测到排球
-            self.missed_frames_counter += 1
+            if detected:
+                self.missed_frames_counter += 1
 
             if self.missed_frames_counter <= self.volleyball_patience and len(self.volleyball_history) > 0:
                 # 在容忍期内，使用预测位置
@@ -202,16 +258,24 @@ class VolleyballActionAnalyzer:
         if calibration is not None:
             self.set_calibration(calibration)
 
-        results = self.pose_model(frame, imgsz=640, conf=0.3, device=self.device)
+        # verbose=False：关闭 ultralytics 的逐帧推理摘要打印（原先每帧写一次控制台）
+        results = self.pose_model(frame, imgsz=POSE_IMGSZ, conf=POSE_CONF, device=self.device,
+                                  half=self.half, verbose=False)
         persons = extract_persons(results)
         track_ids = self.tracker.update([p["bbox"] for p in persons]) if persons else []
         for person, tid in zip(persons, track_ids):
             person["track_id"] = tid
 
         raw_vb_dets = []
+        ball_detected = True
         if self.detect_volleyball_flag and self.volleyball_model is not None:
-            raw_vb_dets = detect_volleyball(self.volleyball_model, frame)
-        vb_dets, is_interpolated = self._interpolate_volleyball(raw_vb_dets)
+            # 抽帧执行：跳过的帧由 _interpolate_volleyball 的轨迹预测补位（容忍 5 帧丢失）
+            ball_detected = self.ball_frame_index % BALL_INTERVAL == 0
+            if ball_detected:
+                raw_vb_dets = detect_volleyball(self.volleyball_model, frame,
+                                                conf=BALL_CONF, imgsz=BALL_IMGSZ)
+            self.ball_frame_index += 1
+        vb_dets, is_interpolated = self._interpolate_volleyball(raw_vb_dets, ball_detected)
         if vb_dets is not None:
             vb_dets = [vb_dets]
         ball_center = vb_dets[0]["center"] if vb_dets else None
@@ -416,7 +480,8 @@ class ActionSession:
                 # 动作开始 - 开启新区间
                 self.is_active = True
                 self.interval_records = []
-                print("--- 动作区间开始 ---")
+                if DEBUG_LOG:
+                    print("--- 动作区间开始 ---")
 
             # 记录当前帧数据
             if pose_judgment:
@@ -431,12 +496,14 @@ class ActionSession:
             if self.is_active:
                 # 动作结束 - 结算区间
                 self.is_active = False
-                print(f"--- 动作区间结束，记录帧数: {len(self.interval_records)} ---")
+                if DEBUG_LOG:
+                    print(f"--- 动作区间结束，记录帧数: {len(self.interval_records)} ---")
 
                 # 使用宏观落差法检测折返
                 if len(self.interval_records) >= 4 or self._check_rebound(self.interval_records, body_height):
                     self.dig_count += 1
-                    print(f"检测到动作！次数: {self.dig_count}")
+                    if DEBUG_LOG:
+                        print(f"检测到动作！次数: {self.dig_count}")
 
                     # 计算区间平均分
                     avg_score = sum(r['total_score'] for r in self.interval_records) / len(self.interval_records)
@@ -456,9 +523,11 @@ class ActionSession:
                         'frame_count': len(self.interval_records),
                         'person_id': self.interval_records[-1].get('person_id')
                     })
-                    print(f"区间得分: {avg_score:.2f}, 标准: {is_standard}")
+                    if DEBUG_LOG:
+                        print(f"区间得分: {avg_score:.2f}, 标准: {is_standard}")
                 else:
-                    print("无折返，不计入垫球次数")
+                    if DEBUG_LOG:
+                        print("无折返，不计入垫球次数")
 
                 self.interval_records = []
 
