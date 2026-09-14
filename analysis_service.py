@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """整合版分析服务：把旧半成品的视觉分析引擎与 SQLite 记录、标准动作库对接。"""
 from __future__ import annotations
+import queue
 import re
 import threading
 import uuid
@@ -20,6 +21,41 @@ RESULTS_DIR = ROOT / "results"
 def _safe_dir(name: str) -> str:
     name = (name or "unknown").strip() or "unknown"
     return re.sub(r'[^0-9A-Za-z_\u4e00-\u9fff-]', "_", name)
+
+
+class _FrameRecorder:
+    """后台线程写盘：逐帧只做入队，视频编码不再占用实时推理的关键路径。"""
+
+    def __init__(self, writer, max_queue: int = 60) -> None:
+        self._writer = writer
+        self._queue: queue.Queue = queue.Queue(maxsize=max_queue)
+        self._dropped = 0
+        self._thread = threading.Thread(target=self._drain, daemon=True)
+        self._thread.start()
+
+    def write(self, frame) -> None:
+        try:
+            self._queue.put_nowait(frame)
+        except queue.Full:
+            self._dropped += 1
+
+    def _drain(self) -> None:
+        while True:
+            item = self._queue.get()
+            try:
+                if item is None:
+                    return
+                self._writer.write(item)
+            finally:
+                self._queue.task_done()
+
+    def close(self) -> int:
+        """等队列写完再释放编码器，返回写盘期间被丢弃的帧数。"""
+        self._queue.join()
+        self._queue.put(None)
+        self._thread.join(timeout=10)
+        self._writer.release()
+        return self._dropped
 
 
 class AnalysisService:
@@ -153,6 +189,7 @@ class AnalysisService:
                 "standard_id": standard_id,
                 "criteria": self.resolve_criteria(action_type, standard_id),
                 "writer": None,
+                "recorder": None,
                 "path": None,
                 "size": None,
                 "frame_count": 0,
@@ -177,10 +214,11 @@ class AnalysisService:
             )
             if rt["writer"] is None:
                 rt["writer"], rt["path"], rt["size"] = self._new_realtime_writer(frame, rt["owner"])
+                rt["recorder"] = _FrameRecorder(rt["writer"])
             output = annotated
             if rt["size"] != (annotated.shape[1], annotated.shape[0]):
                 output = cv2.resize(annotated, rt["size"], interpolation=cv2.INTER_AREA)
-            rt["writer"].write(output)
+            rt["recorder"].write(output)
             rt["frame_count"] += 1
             score = float(judgment.get("total_score", 0) or 0) if judgment else 0.0
             rt["scores"].append(score)
@@ -214,8 +252,11 @@ class AnalysisService:
         rt = self._rt
         if rt is None:
             return None
-        if rt["writer"] is not None:
-            rt["writer"].release()
+        dropped_frames = 0
+        if rt.get("recorder") is not None:
+            dropped_frames = rt["recorder"].close()
+            rt["recorder"] = None
+            rt["writer"] = None
         analyzer = self._get_analyzer()
         summary = analyzer.action_session.get_summary()
         attempts = self._attempts_from_summary(summary)
@@ -241,6 +282,7 @@ class AnalysisService:
             "mode": "realtime",
             "started_at": rt["started_at"],
             "duration_frames": rt["frame_count"],
+            "dropped_frames": dropped_frames,
             "score_curve": [round(float(v), 1) for v in scores],
         })
         session_id = None
@@ -265,6 +307,7 @@ class AnalysisService:
             "video_url": video_url,
             "summary": {
                 "total_frames": rt["frame_count"],
+                "dropped_frames": dropped_frames,
                 "action_count": int(summary.get("action_count") or 0),
                 "standard_count": int(summary.get("standard_count") or 0),
                 "average_score": round(avg_score, 2),

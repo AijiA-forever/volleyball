@@ -366,6 +366,7 @@ async function analyzeImage(){
 // 实时分析（摄像头）
 let camStream=null, camWs=null, camSendBusy=false, camLastSend=0, camSrcVideo=null, camLastAnnotated=0, camFrameCount=0;
 let camTestStream=null, camSendCount=0, camBlackHits=0, camLoopRunning=false;
+let camMinSendInterval=40; // 抽帧间隔下限（ms）：约 25 FPS 上限，实际帧率由后端处理速度与背压决定
 
 function camErrorMessage(err){
   const name = err && err.name ? err.name : 'Error';
@@ -568,7 +569,7 @@ function startCameraLoop(){
       const cctx = cv.getContext('2d');
       try{ cctx.drawImage(camSrcVideo, 0, 0, cv.width, cv.height); }catch(e){}
     }
-    if(!camSendBusy && (ts - camLastSend) > 110){
+    if(!camSendBusy && (ts - camLastSend) > camMinSendInterval){
       camLastSend = ts; camSendBusy = true;
       try{
         ctx.drawImage(camSrcVideo, 0, 0, canvas.width, canvas.height);
@@ -599,8 +600,11 @@ function startCameraLoop(){
             }
           }catch(e){}
         }
-        const data = canvas.toDataURL('image/jpeg', 0.6).split(',')[1];
-        camWs.send(JSON.stringify({frame:data}));
+        // 直接发送 JPEG 二进制帧：省掉 base64 编码与 JSON 包装（体积减少约 33%）
+        canvas.toBlob(function(blob){
+          if(!blob || !camWs || camWs.readyState !== WebSocket.OPEN){ camSendBusy = false; return; }
+          try{ camWs.send(blob); }catch(e){ camSendBusy = false; }
+        }, 'image/jpeg', 0.6);
       }catch(e){ camSendBusy = false; }
     }
     requestAnimationFrame(tick);

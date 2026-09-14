@@ -28,6 +28,29 @@ def get_chinese_font():
 
 CHINESE_FONT = get_chinese_font()
 
+def put_chinese_texts(img, items):
+    """一次 PIL 往返绘制多条中文文本。
+
+    :param items: [(text, position, font_size, color), ...]
+    逐条调用 put_chinese_text 会对整帧做多次 BGR↔RGB 转换，逐帧开销明显；
+    把同一帧的所有中文合并成一次转换可省掉这部分重复开销。
+    """
+    if not items:
+        return img
+    img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+    draw = ImageDraw.Draw(img_pil)
+    for text, position, font_size, color in items:
+        if CHINESE_FONT:
+            try:
+                font = ImageFont.truetype(CHINESE_FONT, font_size)
+            except Exception:
+                font = ImageFont.load_default()
+        else:
+            font = ImageFont.load_default()
+        draw.text(position, text, font=font, fill=(color[2], color[1], color[0]))
+    return cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
+
+
 def put_chinese_text(img, text, position, font_size=12, color=(255, 255, 0)):
     """
     在图像上绘制中文字符
@@ -38,25 +61,7 @@ def put_chinese_text(img, text, position, font_size=12, color=(255, 255, 0)):
     :param color: 文字颜色 (B, G, R)
     :return: 绘制后的图像
     """
-    # 将OpenCV图像转换为PIL图像
-    img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-    draw = ImageDraw.Draw(img_pil)
-    
-    # 加载字体
-    if CHINESE_FONT:
-        try:
-            font = ImageFont.truetype(CHINESE_FONT, font_size)
-        except:
-            font = ImageFont.load_default()
-    else:
-        font = ImageFont.load_default()
-    
-    # 绘制文字
-    draw.text(position, text, font=font, fill=(color[2], color[1], color[0]))
-    
-    # 将PIL图像转换回OpenCV图像
-    img_cv = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
-    return img_cv
+    return put_chinese_texts(img, [(text, position, font_size, color)])
 
 # ===================== 核心配置 =====================
 # YOLOv8-pose关键点名称与索引映射（固定顺序）
@@ -315,6 +320,10 @@ def draw_pose_results(image, results, pose_judgment=None):
             judge_font_thickness
         )
         
+        # 中文文本先收集，函数末尾一次性绘制（避免逐条对整帧做色彩空间转换）
+        chinese_items = []
+        cn_font_size = int(30 * judge_font_scale)
+
         # 绘制指导建议（在判断结果上方）
         if 'feedback' in pose_judgment and pose_judgment['feedback']:
             feedback_y = h - int(50 * scale_factor) - int(50 * scale_factor)
@@ -322,14 +331,9 @@ def draw_pose_results(image, results, pose_judgment=None):
             # 使用与姿势判断相同的字体格式
             for i, advice in enumerate(reversed(pose_judgment['feedback']), 1):
                 feedback_text = f"建议 {i}: {advice}"
-                # 使用put_chinese_text函数绘制中文，确保字体大小与姿势判断一致
-                img_copy = put_chinese_text(
-                    img_copy,
-                    feedback_text,
-                    (int(20 * scale_factor), feedback_y),
-                    font_size=int(30 * judge_font_scale),  # 调整字体大小，与姿势判断一致
-                    color=(255, 255, 0)  # 黄色文字
-                )
+                # 字体大小与姿势判断保持一致
+                chinese_items.append((feedback_text, (int(20 * scale_factor), feedback_y),
+                                      cn_font_size, (255, 255, 0)))
                 feedback_y -= feedback_line_height  # 每行间隔，与其他元素保持一致
         else:
             feedback_y = h - int(50 * scale_factor) - int(50 * scale_factor)
@@ -338,15 +342,9 @@ def draw_pose_results(image, results, pose_judgment=None):
         if 'volleyball_arm_distance' in pose_judgment:
             distance_text = f"球臂距离: {pose_judgment['volleyball_arm_distance']:.1f}px"
             distance_y = feedback_y - int(35 * scale_factor)  # 调整间距，与其他元素保持一致
-            
-            # 使用put_chinese_text保持字体一致性
-            img_copy = put_chinese_text(
-                img_copy,
-                distance_text,
-                (int(20 * scale_factor), distance_y),
-                font_size=int(30 * judge_font_scale),
-                color=(255, 255, 0)  # 黄色
-            )
+
+            chinese_items.append((distance_text, (int(20 * scale_factor), distance_y),
+                                  cn_font_size, (255, 255, 0)))
             
             # 判断距离是否超过阈值并显示相关文字
             if 'distance_threshold' in pose_judgment:
@@ -361,13 +359,11 @@ def draw_pose_results(image, results, pose_judgment=None):
                     status_color = (0, 0, 255)  # 红色文字
                 
                 status_y = distance_y - int(35 * scale_factor)  # 调整状态文字的位置，避免重叠
-                img_copy = put_chinese_text(
-                    img_copy,
-                    status_text,
-                    (int(20 * scale_factor), status_y),
-                    font_size=int(30 * judge_font_scale),  # 与姿势判断使用相同的字体大小
-                    color=status_color
-                )
+                # 与姿势判断使用相同的字体大小
+                chinese_items.append((status_text, (int(20 * scale_factor), status_y),
+                                      cn_font_size, status_color))
+
+        img_copy = put_chinese_texts(img_copy, chinese_items)
 
     return img_copy
 

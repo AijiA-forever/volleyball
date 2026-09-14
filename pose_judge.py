@@ -2,6 +2,10 @@
 from body import calculate_angle
 import numpy as np
 import copy
+import os
+
+# 逐帧调试打印开关，默认关闭（原先每帧都会打印一行 Position: 到控制台）
+_DEBUG_LOG = os.environ.get("VB_DEBUG_LOG") == "1"
 
 # 动作角度阈值配置
 # 垫球: 双臂伸直、膝盖弯曲、重心前倾
@@ -195,7 +199,8 @@ def judge_pose(keypoints, action_type, criteria=None):
 
     # 判断是否为侧身姿势
     is_side = is_side_position(keypoints)
-    print(f"Position: {'Side' if is_side else 'Front'}")
+    if _DEBUG_LOG:
+        print(f"Position: {'Side' if is_side else 'Front'}")
 
     criteria = get_criteria(action_type, criteria)
     weights = criteria["weights"]
