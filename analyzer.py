@@ -46,9 +46,11 @@ POSE_IMGSZ = _env_int("VB_POSE_IMGSZ", 640)
 POSE_CONF = _env_float("VB_POSE_CONF", 0.3)
 BALL_IMGSZ = _env_int("VB_BALL_IMGSZ", 640)
 BALL_CONF = _env_float("VB_BALL_CONF", 0.5)
-# 每 N 帧执行一次排球检测。实测 N=2 时动作数与得分与原实现一致；N>=3 会因球轨迹外推误差
-# 累积导致动作区间被截断（同一素材动作数降为 0），因此默认取 2。
-BALL_INTERVAL = max(1, _env_int("VB_BALL_INTERVAL", 2))
+# 每 N 帧执行一次排球检测。默认 1（每帧检测），保证动作计数准确。
+# 实测：在 4 段不同素材上，N=2 会把动作数从 [3,5,3,4] 降为 [3,1,1,1]，
+# 因为跳帧期间球轨迹靠外推，动作区间容易被提前截断。
+# 机器性能不足时可用环境变量 VB_BALL_INTERVAL=2 换取速度，但要接受计数偏差。
+BALL_INTERVAL = max(1, _env_int("VB_BALL_INTERVAL", 1))
 DEBUG_LOG = os.environ.get("VB_DEBUG_LOG") == "1"        # 逐帧/区间调试打印开关
 
 
@@ -220,6 +222,18 @@ class VolleyballActionAnalyzer:
             if 'right_wrist' in valid_kpts:
                 wrist_ys.append(valid_kpts['right_wrist'][1])
         return sum(wrist_ys) / len(wrist_ys) if wrist_ys else None
+
+    def reset_tracking(self):
+        """重置所有跨帧状态（换视频/换会话前必须调用，避免上一段素材的轨迹污染下一段）。"""
+        self.tracker.reset()
+        self.frame_person_counts = []
+        self.primary_id_history = []
+        self.last_primary_id = None
+        self.last_valid_kpts = None
+        self.volleyball_history = []
+        self.missed_frames_counter = 0
+        self.last_velocity = None
+        self.ball_frame_index = 0
 
     def set_calibration(self, calibration):
         """calibration 可以是 {label, points} 或直接 points 字典。"""

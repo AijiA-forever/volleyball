@@ -59,8 +59,8 @@ def draw_volleyball_results(frame, detections, show_conf=True):
     img_copy = frame.copy()
 
     for det in detections:
-        x1, y1, x2, y2 = det['bbox']
-        conf = det['confidence']
+        x1, y1, x2, y2 = [int(v) for v in det['bbox']]
+        conf = float(det['confidence'])
 
         cv2.rectangle(img_copy, (x1, y1), (x2, y2), (0, 255, 0), 2)
 

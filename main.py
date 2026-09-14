@@ -16,6 +16,7 @@ import sys
 import threading
 import os
 import secrets
+import time
 import uuid
 from pathlib import Path
 from typing import List, Optional
@@ -561,6 +562,7 @@ async def websocket_camera(ws: WebSocket, token: str = ""):
     standard_id = None
     student = user["username"] if user.get("role") == "student" else "实时训练"
     started = False
+    last_frame_ts = 0.0
     try:
         first = json.loads(await ws.receive_text())
         action_type = first.get("action_type", "dig")
@@ -591,6 +593,11 @@ async def websocket_camera(ws: WebSocket, token: str = ""):
                 payload = base64.b64decode(frame_b64)
             if not payload:
                 continue
+            # 服务端限速：同一连接 20ms 内重复到达的帧直接丢弃，避免被刷爆线程池
+            now_ts = time.monotonic()
+            if now_ts - last_frame_ts < 0.02:
+                continue
+            last_frame_ts = now_ts
             buf = np.frombuffer(payload, np.uint8)
             frame = cv2.imdecode(buf, cv2.IMREAD_COLOR)
             if frame is None:
@@ -600,13 +607,15 @@ async def websocket_camera(ws: WebSocket, token: str = ""):
             annotated = result["annotated"]
             judgment = result["judgment"]
             ok, jpg = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
+            # 先发元数据(JSON)，再发图像(二进制)，省掉 base64 约 33% 的体积
             await ws.send_json({
                 "type": "frame",
-                "frame": base64.b64encode(jpg).decode("utf-8"),
                 "pose_judgment": judgment or {},
                 "live": result["live"],
                 "session_info": result["session_info"],
             })
+            if ok:
+                await ws.send_bytes(jpg.tobytes())
     except WebSocketDisconnect:
         pass
     except Exception as exc:

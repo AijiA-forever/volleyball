@@ -97,3 +97,26 @@ C:\miniconda\envs\volleyball_analytics\python.exe -m uvicorn main:app --host 127
 ## 结题与产品化
 
 - [结题与产品化路线图.md](docs/结题与产品化路线图.md)
+
+
+## 环境变量（性能与设备）
+
+| 变量 | 默认 | 说明 |
+| ---- | ---- | ---- |
+| `VB_DEVICE` | 自动 | `cpu` / `0` / `cuda:0` / `gpu`，强制指定推理设备 |
+| `VB_POSE_IMGSZ` | 640 | 姿态模型输入尺寸，调小更快、精度略降 |
+| `VB_POSE_CONF` | 0.3 | 姿态关键点置信度阈值 |
+| `VB_BALL_IMGSZ` | 640 | 排球检测输入尺寸 |
+| `VB_BALL_CONF` | 0.5 | 排球检测置信度阈值 |
+| `VB_BALL_INTERVAL` | 1 | 实时分析每 N 帧检测一次排球。默认 1 保证动作计数准确；设为 2 可提速，但实测会明显少算动作 |
+| `VB_BALL_INTERVAL_VIDEO` | 1 | 离线视频分析每 N 帧检测一次排球（默认 1，精度优先） |
+| `VB_DEBUG_LOG` | 0 | 设为 1 打开逐帧调试打印 |
+
+示例（CPU 且想更快）：
+
+```bat
+set VB_POSE_IMGSZ=480
+set VB_BALL_IMGSZ=480
+set VB_BALL_INTERVAL=1
+python -m uvicorn main:app --host 0.0.0.0 --port 8000
+```

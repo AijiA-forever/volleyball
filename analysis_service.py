@@ -202,13 +202,11 @@ class AnalysisService:
             self._finalize_realtime_locked()
             analyzer = self._get_analyzer()
             analyzer.action_session = ActionSession(action_type)
-            analyzer.tracker.reset()
-            analyzer.frame_person_counts = []
-            analyzer.primary_id_history = []
+            analyzer.reset_tracking()
             try:
-                analyzer.ball_interval = max(1, int(os.environ.get("VB_BALL_INTERVAL", "2")))
+                analyzer.ball_interval = max(1, int(os.environ.get("VB_BALL_INTERVAL", "1")))
             except (TypeError, ValueError):
-                analyzer.ball_interval = 2
+                analyzer.ball_interval = 1
             self._rt = {
                 "owner": student or "实时训练",
                 "calibration": self.resolve_calibration(calibration_label),
@@ -364,15 +362,14 @@ class AnalysisService:
 
     def analyze_video(self, input_path: Path, action_type: str,
                       standard_id: Optional[int], student: str,
-                      calibration_label: Optional[str] = None, save: bool = True) -> Dict[str, Any]:
+                      calibration_label: Optional[str] = None, save: bool = True,
+                      write_video: bool = True) -> Dict[str, Any]:
         if self._rt is not None:
             raise RuntimeError("实时分析正在进行，请先停止实时分析")
         with self._lock:
             analyzer = self._get_analyzer()
             analyzer.action_session = ActionSession(action_type)
-            analyzer.tracker.reset()
-            analyzer.frame_person_counts = []
-            analyzer.primary_id_history = []
+            analyzer.reset_tracking()
             try:
                 analyzer.ball_interval = max(1, int(os.environ.get("VB_BALL_INTERVAL_VIDEO", "1")))
             except (TypeError, ValueError):
@@ -386,26 +383,28 @@ class AnalysisService:
             width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            RESULTS_DIR.joinpath("videos").mkdir(parents=True, exist_ok=True)
             writer = None
             out_path = None
+            out_name = None
             out_width, out_height = width, height
             if width > 960:
                 scale = 960.0 / width
                 out_width = int(width * scale) // 2 * 2
                 out_height = int(height * scale) // 2 * 2
-            for codec in ("VP80", "VP90", "mp4v"):
-                ext = "webm" if codec != "mp4v" else "mp4"
-                candidate = RESULTS_DIR / "videos" / self._out_name("analyzed", ext)
-                w = cv2.VideoWriter(str(candidate), cv2.VideoWriter_fourcc(*codec), fps, (out_width, out_height))
-                if w.isOpened():
-                    writer = w
-                    out_path = candidate
-                    break
-                w.release()
-            if writer is None:
-                raise RuntimeError("当前环境没有可用的视频编码器")
-            out_name = out_path.name
+            if write_video:
+                RESULTS_DIR.joinpath("videos").mkdir(parents=True, exist_ok=True)
+                for codec in ("VP80", "VP90", "mp4v"):
+                    ext = "webm" if codec != "mp4v" else "mp4"
+                    candidate = RESULTS_DIR / "videos" / self._out_name("analyzed", ext)
+                    w = cv2.VideoWriter(str(candidate), cv2.VideoWriter_fourcc(*codec), fps, (out_width, out_height))
+                    if w.isOpened():
+                        writer = w
+                        out_path = candidate
+                        break
+                    w.release()
+                if writer is None:
+                    raise RuntimeError("当前环境没有可用的视频编码器")
+                out_name = out_path.name
             frame_count = 0
             frame_scores: List[float] = []
             try:
@@ -418,10 +417,12 @@ class AnalysisService:
                         frame, action_type, criteria, calibration
                     )
                     frame_scores.append(float(judgment.get("total_score", 0) or 0) if judgment else 0.0)
-                    writer.write(cv2.resize(annotated, (out_width, out_height), interpolation=cv2.INTER_AREA))
+                    if writer is not None:
+                        writer.write(cv2.resize(annotated, (out_width, out_height), interpolation=cv2.INTER_AREA))
             finally:
                 cap.release()
-                writer.release()
+                if writer is not None:
+                    writer.release()
             summary = analyzer.action_session.get_summary()
             summary.update(analyzer.tracking_summary())
             summary["calibration_label"] = calibration_label
@@ -450,7 +451,7 @@ class AnalysisService:
                 best_score = 0.0
             action_count = int(summary.get("action_count") or 0)
             standard_count = int(summary.get("standard_count") or 0)
-            rel_out = f"results/videos/{out_name}"
+            rel_out = f"results/videos/{out_name}" if out_name else None
             session_id = None
             if save:
                 session_id = create_session(
@@ -458,7 +459,7 @@ class AnalysisService:
                 action_type=action_type,
                 standard_id=standard_id,
                 src_path=str(input_path),
-                out_path=str(out_path),
+                out_path=str(out_path) if out_path else None,
                 total_frames=frame_count,
                 action_count=action_count,
                 standard_count=standard_count,
@@ -471,8 +472,8 @@ class AnalysisService:
             return {
                 "session_id": session_id,
                 "kind": "video",
-                "video_url": f"/{rel_out.replace(chr(92), '/')}",
-                "output_path": str(out_path),
+                "video_url": f"/{rel_out}" if rel_out else None,
+                "output_path": str(out_path) if out_path else None,
                 "summary": {
                     "total_frames": frame_count,
                     "action_count": action_count,
@@ -498,9 +499,7 @@ class AnalysisService:
         with self._lock:
             analyzer = self._get_analyzer()
             analyzer.action_session = ActionSession(action_type)
-            analyzer.tracker.reset()
-            analyzer.frame_person_counts = []
-            analyzer.primary_id_history = []
+            analyzer.reset_tracking()
             criteria = self.resolve_criteria(action_type, standard_id)
             calibration = self.resolve_calibration(calibration_label)
             img = cv2.imread(str(input_path))
