@@ -3,6 +3,7 @@
 from __future__ import annotations
 import os
 import queue
+import time
 import re
 import threading
 import uuid
@@ -226,6 +227,7 @@ class AnalysisService:
                 "size": None,
                 "frame_count": 0,
                 "scores": [],
+                "started_ts": time.time(),
                 "started_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             }
             return {"ok": True, "student": self._rt["student"], "action_type": action_type}
@@ -312,6 +314,12 @@ class AnalysisService:
             video_url = f"/results/realtime_videos/{_safe_dir(rt['owner'])}/{Path(out_path).name}"
         summary = dict(summary)
         summary.update(analyzer.tracking_summary())
+        try:
+            elapsed = max(0.1, time.time() - rt.get("started_ts", time.time()))
+            fps_est = (rt["frame_count"] / elapsed) if rt["frame_count"] else 30.0
+        except Exception:
+            fps_est = 30.0
+        summary["biomechanics"] = analyzer.biomechanics_summary(fps=fps_est)
         summary.update({
             "mode": "realtime",
             "started_at": rt["started_at"],
@@ -354,6 +362,7 @@ class AnalysisService:
                 "multi_person_frames": summary.get("multi_person_frames", 0),
                 "primary_ids": summary.get("primary_ids", []),
                 "calibration_label": rt.get("calibration_label"),
+                "biomechanics": summary.get("biomechanics"),
                 "feedback": attempts[-1]["feedback"] if attempts else [],
             },
             "attempts": attempts,
@@ -440,6 +449,7 @@ class AnalysisService:
                     writer.release()
             summary = analyzer.action_session.get_summary()
             summary.update(analyzer.tracking_summary())
+            summary["biomechanics"] = analyzer.biomechanics_summary(fps=fps if fps else 30.0)
             summary["calibration_label"] = calibration_label
             action_scores = summary.get("action_scores") or []
             action_feedbacks = summary.get("action_feedbacks") or []
@@ -504,6 +514,7 @@ class AnalysisService:
                     "calibration_label": calibration_label,
                     "encoding_dropped_frames": encoding_dropped,
                     "encoding_error": encoding_error,
+                    "biomechanics": summary.get("biomechanics"),
                     "feedback": attempts[-1]["feedback"] if attempts else [],
                 },
                 "attempts": attempts,

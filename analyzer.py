@@ -11,6 +11,7 @@ from body import (
     calculate_angle,
 )
 from tracking import SimpleTracker
+from metrics import compute_frame_metrics, summarize as summarize_biomechanics
 from geometry import homography_from_points, correct_keypoints
 from pose_judge import judge_pose
 from volleyball_detect import (
@@ -223,6 +224,13 @@ class VolleyballActionAnalyzer:
                 wrist_ys.append(valid_kpts['right_wrist'][1])
         return sum(wrist_ys) / len(wrist_ys) if wrist_ys else None
 
+    def biomechanics_summary(self, fps: float = 30.0):
+        """动作级生物力学指标汇总（见 metrics.py 与文献对照表）。"""
+        try:
+            return summarize_biomechanics(self.metric_records, fps=fps)
+        except Exception as exc:
+            return {"error": str(exc), "total_frames": len(self.metric_records)}
+
     def reset_tracking(self):
         """重置所有跨帧状态（换视频/换会话前必须调用，避免上一段素材的轨迹污染下一段）。"""
         self.tracker.reset()
@@ -234,6 +242,7 @@ class VolleyballActionAnalyzer:
         self.missed_frames_counter = 0
         self.last_velocity = None
         self.ball_frame_index = 0
+        self.metric_records = []
 
     def set_calibration(self, calibration):
         """calibration 可以是 {label, points} 或直接 points 字典。"""
@@ -318,6 +327,10 @@ class VolleyballActionAnalyzer:
         self.frame_person_counts.append(len(persons))
         if person_id is not None:
             self.primary_id_history.append(person_id)
+        try:
+            self.metric_records.append(compute_frame_metrics(valid_kpts) if valid_kpts else {})
+        except Exception:
+            self.metric_records.append({})
 
         pose_judgment = None
         if valid_kpts:
