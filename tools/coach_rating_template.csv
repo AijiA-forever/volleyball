@@ -1,0 +1,4 @@
+﻿video,student,action,cam_view,coach_id,reps,overall_score,standard_flag,prep_score,contact_score,follow_score,knee_flexion_score,trunk_lean_score,arm_extension_score,landing_buffer_score,notes
+dig_S01_side_01.mp4,S01,dig,side,coachA,3,8,1,4,4,4,3,4,4,4,准备稍慢
+dig_S01_side_01.mp4,S01,dig,side,coachB,3,7,1,4,4,3,3,4,4,4,手臂可以更稳
+dig_S02_side_01.mp4,S02,dig,side,coachA,2,5,0,3,2,3,2,3,3,2,击球点偏后

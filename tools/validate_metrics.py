@@ -2,22 +2,24 @@
 """生物力学指标验证工具：系统评分/指标 vs 教练评分。
 
 用法：
-    # 1) 生成评分模板
     python tools/validate_metrics.py --template ratings.csv
+    python tools/validate_metrics.py --videos "D:\训练视频" --ratings ratings.csv --action dig
 
-    # 2) 填好模板（video 列写视频文件名，coach_score 写教练评分 1-10），再运行
-    python tools/validate_metrics.py --videos "C:\\path\\to\\videos" --ratings ratings.csv --action dig
+评分 CSV 支持：
+- 每行一个"视频 × 教练"的评分；
+- 总分列名可以是 overall_score 或 coach_score；
+- 可选分项列：prep_score / contact_score / follow_score /
+  knee_flexion_score / trunk_lean_score / arm_extension_score / landing_buffer_score；
+- 同一视频多名教练时，系统会自动取平均，并计算教练之间的 ICC（inter-rater）。
 
 输出：
-    validation_report.md   统计报告（Pearson / Spearman / ICC(2,1) / Bland-Altman）
-    validation_metrics.csv 每个视频的系统评分与生物力学指标
+    validation/validation_report.md
+    validation/validation_metrics.csv
 """
 from __future__ import annotations
 
 import argparse
 import csv
-import json
-import math
 import sys
 from pathlib import Path
 
@@ -25,6 +27,19 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+
+SUB_KEYS = [
+    "prep_score", "contact_score", "follow_score",
+    "knee_flexion_score", "trunk_lean_score", "arm_extension_score", "landing_buffer_score",
+]
+BIO_KEYS = [
+    "peak_knee_angular_velocity", "peak_hip_angular_velocity", "peak_elbow_angular_velocity",
+    "takeoff_com_velocity_bh", "jump_height_bh",
+    "landing_knee_flexion_angle", "landing_knee_flexion_velocity",
+    "min_knee_angle", "max_trunk_inclination", "platform_angle_std",
+]
+TEMPLATE_HEADER = ["video", "student", "action", "cam_view", "coach_id", "reps", "overall_score",
+                   "standard_flag"] + SUB_KEYS + ["notes"]
 
 
 def pearson(x, y):
@@ -46,10 +61,7 @@ def spearman(x, y):
 
 
 def icc_2_1(matrix):
-    """ICC(2,1)：双向随机效应、绝对一致性、单次测量。
-
-    matrix: n 个受试者 × k 个评分者（这里 k=2：系统分、教练分）
-    """
+    """ICC(2,1)：双向随机效应、绝对一致性、单次测量。matrix = n 个受试者 × k 个评分者。"""
     data = np.asarray(matrix, dtype=float)
     n, k = data.shape
     if n < 2 or k < 2:
@@ -64,13 +76,9 @@ def icc_2_1(matrix):
     df_row, df_col, df_error = n - 1, k - 1, (n - 1) * (k - 1)
     if df_error <= 0:
         return float("nan")
-    msr = ss_row / df_row
-    msc = ss_col / df_col
-    mse = ss_error / df_error
+    msr, msc, mse = ss_row / df_row, ss_col / df_col, ss_error / df_error
     denom = msr + (k - 1) * mse + k * (msc - mse) / n
-    if denom == 0:
-        return float("nan")
-    return float((msr - mse) / denom)
+    return float((msr - mse) / denom) if denom else float("nan")
 
 
 def bland_altman(system, coach):
@@ -85,9 +93,46 @@ def bland_altman(system, coach):
 def write_template(path: Path):
     with path.open("w", newline="", encoding="utf-8-sig") as fh:
         writer = csv.writer(fh)
-        writer.writerow(["video", "coach_score", "action"])
-        writer.writerow(["example_dig_01.mp4", "8", "dig"])
+        writer.writerow(TEMPLATE_HEADER)
+        writer.writerow(["dig_S01_side_01.mp4", "S01", "dig", "side", "coachA", "3", "8", "1",
+                         "4", "4", "4", "3", "4", "4", "4", "准备稍慢"])
+        writer.writerow(["dig_S01_side_01.mp4", "S01", "dig", "side", "coachB", "3", "7", "1",
+                         "4", "4", "3", "3", "4", "4", "4", "手臂可以更稳"])
     print("模板已生成:", path)
+
+
+def load_ratings(path: Path):
+    """按视频聚合：多名教练取平均，分项分取平均。"""
+    groups = {}
+    with path.open(encoding="utf-8-sig") as fh:
+        for item in csv.DictReader(fh):
+            video = (item.get("video") or "").strip()
+            score = item.get("overall_score") or item.get("coach_score")
+            if not video or score in (None, ""):
+                continue
+            group = groups.setdefault(video, {
+                "action": (item.get("action") or "").strip(),
+                "scores": [],
+                "coach_ids": [],
+                "sub": {k: [] for k in SUB_KEYS},
+            })
+            try:
+                group["scores"].append(float(score))
+            except ValueError:
+                continue
+            group["coach_ids"].append((item.get("coach_id") or "coach").strip())
+            for key in SUB_KEYS:
+                value = item.get(key)
+                if value not in (None, ""):
+                    try:
+                        group["sub"][key].append(float(value))
+                    except ValueError:
+                        pass
+    return groups
+
+
+def mean_or_none(values):
+    return round(sum(values) / len(values), 2) if values else None
 
 
 def main():
@@ -108,60 +153,57 @@ def main():
     if not args.videos or not args.ratings:
         parser.error("需要 --videos 和 --ratings（或使用 --template 生成模板）")
 
-    out_dir = Path(args.out)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    rows = []
-    with Path(args.ratings).open(encoding="utf-8-sig") as fh:
-        for item in csv.DictReader(fh):
-            if item.get("video") and item.get("coach_score"):
-                rows.append(item)
+    groups = load_ratings(Path(args.ratings))
     if args.limit:
-        rows = rows[: args.limit]
-    if not rows:
+        groups = dict(list(groups.items())[: args.limit])
+    if not groups:
         print("评分 CSV 没有有效行")
         return 1
 
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
     from analysis_service import AnalysisService
     service = AnalysisService()
-    results = []
-    for i, row in enumerate(rows, 1):
-        video = Path(args.videos) / row["video"]
+    results, inter_pairs = [], []
+    for i, (video_name, group) in enumerate(groups.items(), 1):
+        video = Path(args.videos) / video_name
         if not video.exists():
-            print(f"[{i}/{len(rows)}] 跳过（文件不存在）: {video}")
+            print(f"[{i}/{len(groups)}] 跳过（文件不存在）: {video}")
             continue
-        print(f"[{i}/{len(rows)}] 分析 {video.name} ...", flush=True)
+        print(f"[{i}/{len(groups)}] 分析 {video_name} ...", flush=True)
         try:
-            res = service.analyze_video(video, row.get("action") or args.action, None,
+            res = service.analyze_video(video, group["action"] or args.action, None,
                                         "指标验证", save=False, write_video=False)
         except Exception as exc:
             print("  失败:", exc)
             continue
         summary = res.get("summary") or {}
         bio = summary.get("biomechanics") or {}
-        results.append({
-            "video": row["video"],
-            "coach_score": float(row["coach_score"]),
+        row = {
+            "video": video_name,
+            "coach_score": mean_or_none(group["scores"]),
+            "coach_n": len(group["scores"]),
             "system_score": summary.get("average_score"),
             "action_count": summary.get("action_count"),
-            "peak_knee_angular_velocity": bio.get("peak_knee_angular_velocity"),
-            "peak_hip_angular_velocity": bio.get("peak_hip_angular_velocity"),
-            "takeoff_com_velocity_bh": bio.get("takeoff_com_velocity_bh"),
-            "jump_height_bh": bio.get("jump_height_bh"),
-            "landing_knee_flexion_angle": bio.get("landing_knee_flexion_angle"),
-            "min_knee_angle": bio.get("min_knee_angle"),
-            "platform_angle_std": bio.get("platform_angle_std"),
-        })
+        }
+        for key in SUB_KEYS:
+            row[key] = mean_or_none(group["sub"][key])
+        for key in BIO_KEYS:
+            row[key] = bio.get(key)
+        results.append(row)
+        if len(group["scores"]) >= 2:
+            inter_pairs.append(group["scores"][:2])
 
     if len(results) < 2:
         print("有效样本不足，无法统计")
         return 1
 
     system = [r["system_score"] or 0 for r in results]
-    coach = [r["coach_score"] for r in results]
-    # 系统分与教练分满分不同，ICC/Bland-Altman 前先换算到同一量纲
+    coach = [r["coach_score"] or 0 for r in results]
     system_scaled = [v / args.system_max * args.coach_max for v in system]
-    report = []
-    report.append("# 生物力学指标验证报告\n")
+
+    report = ["# 生物力学指标验证报告\n\n"]
     report.append(f"- 样本量：{len(results)}\n- 动作：{args.action}\n")
     report.append(f"- 尺度换算：系统分 {args.system_max:g} 分制 → 教练 {args.coach_max:g} 分制\n")
     report.append(f"- 系统分 vs 教练分 Pearson r = **{pearson(system_scaled, coach):.3f}**\n")
@@ -169,18 +211,17 @@ def main():
     report.append(f"- ICC(2,1) 绝对一致性 = **{icc_2_1(np.column_stack([system_scaled, coach])):.3f}**\n")
     bias, loa_low, loa_high = bland_altman(system_scaled, coach)
     report.append(f"- Bland-Altman：偏差 {bias:.2f}（教练分制），一致性界限 [{loa_low:.2f}, {loa_high:.2f}]\n")
-    report.append("\n## 各指标与教练评分的相关性\n\n")
-    report.append("| 指标 | Pearson r |\n| --- | --- |\n")
-    for key in results[0].keys():
-        if key in ("video", "coach_score", "system_score"):
-            continue
-        values = [r[key] for r in results]
+    if len(inter_pairs) >= 3:
+        report.append(f"- 教练之间 ICC(2,1)（{len(inter_pairs)} 个视频 × 2 名教练）= **{icc_2_1(np.array(inter_pairs, dtype=float)):.3f}**\n")
+
+    report.append("\n## 各指标与教练评分的相关性\n\n| 指标 | Pearson r |\n| --- | --- |\n")
+    for key in BIO_KEYS + SUB_KEYS:
+        values = [r.get(key) for r in results]
         pairs = [(v, c) for v, c in zip(values, coach) if v is not None]
         if len(pairs) >= 3:
-            r = pearson([p[0] for p in pairs], [p[1] for p in pairs])
-            report.append(f"| {key} | {r:.3f} |\n")
-    report.append("\n## 逐样本数据\n\n")
-    report.append("| 视频 | 教练分 | 系统分 | 峰值膝角速度 | 起跳重心速度 | 落地膝角 |\n| --- | --- | --- | --- | --- | --- |\n")
+            report.append(f"| {key} | {pearson([p[0] for p in pairs], [p[1] for p in pairs]):.3f} |\n")
+
+    report.append("\n## 逐样本数据\n\n| 视频 | 教练分 | 系统分 | 峰值膝角速度 | 起跳重心速度 | 落地膝角 |\n| --- | --- | --- | --- | --- | --- |\n")
     for r in results:
         report.append(f"| {r['video']} | {r['coach_score']} | {r['system_score']} | "
                       f"{r['peak_knee_angular_velocity']} | {r['takeoff_com_velocity_bh']} | "
