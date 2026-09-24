@@ -134,3 +134,18 @@ python -m uvicorn main:app --host 0.0.0.0 --port 8000
 - SQLite 启用 WAL + busy_timeout(5s) + 常用查询索引，数据量大时更稳；
 - 训练产物目录 `models/trained/` 不进入版本库；
 - 提供 `tools/smoke_test.py` 一键冒烟测试。
+
+## 生物力学指标
+
+- 研究文档：[docs/排球动作生物力学量化指标研究.md](docs/排球动作生物力学量化指标研究.md)
+- 指标计算：`metrics.py`（矢状面角度/角速度、起跳速度、跳跃高度、落地缓冲、平台稳定性）
+- 一致性验证：`python tools/validate_metrics.py --template ratings.csv` / `--videos <目录> --ratings <csv>`
+- 结果页会展示：峰值膝角速度、峰值髋角速度、起跳重心速度、起跳高度、落地缓冲膝角、前臂平台稳定性
+
+### 验证数据采集
+
+- 拍摄与评分规范：[docs/训练视频拍摄与教练评分规范.md](docs/训练视频拍摄与教练评分规范.md)
+- 评分模板：`tools/coach_rating_template.csv`（支持多名教练、分项评分）
+- 生成模板：`python tools/validate_metrics.py --template ratings.csv`
+- 跑验证：`python tools/validate_metrics.py --videos "<视频目录>" --ratings "<评分CSV>" --action dig`
+- 输出：`validation/validation_report.md`（Pearson / Spearman / ICC / Bland-Altman / 教练间 ICC）与 `validation/validation_metrics.csv`
