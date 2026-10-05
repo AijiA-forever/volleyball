@@ -149,3 +149,12 @@ python -m uvicorn main:app --host 0.0.0.0 --port 8000
 - 生成模板：`python tools/validate_metrics.py --template ratings.csv`
 - 跑验证：`python tools/validate_metrics.py --videos "<视频目录>" --ratings "<评分CSV>" --action dig`
 - 输出：`validation/validation_report.md`（Pearson / Spearman / ICC / Bland-Altman / 教练间 ICC）与 `validation/validation_metrics.csv`
+
+## 时序动作对比（DTW）
+
+- 模块：`temporal.py`（逐帧序列采集 + 多维 DTW + 模板管理，不依赖前端与数据库）
+- 自检：`python temporal.py --self-test`
+- 建模板：`python temporal.py --build-template --videos "<标准视频目录>" --action dig --out templates/dig.npz`
+- 对比：`python temporal.py --video "<学生视频>" --template templates/dig.npz`
+- 说明：相似度 = 100·exp(-DTW距离/tau)，`tau` 默认 1.0，需用教练评分校准后再固定；
+  时长比单独输出，反映动作节奏差异（DTW 本身会吸收时间错位，不反映在相似度里）。
