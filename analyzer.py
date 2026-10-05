@@ -91,6 +91,11 @@ class VolleyballActionAnalyzer:
                   f"（torch {torch.__version__}，CUDA {torch.version.cuda}，FP16={self.half}）", flush=True)
         if self.half:
             try:
+                # 先在 FP32 下融合 Conv+BN，再转半精度。
+                # ultralytics 的 fuse_conv_and_bn 对 bias 为空的卷积层用 torch.zeros 生成
+                # float32 偏置，模型已是 half 时 torch.mm 会报 dtype 不匹配而崩溃。
+                # 融合结果与首次推理时自动融合完全等价，提前做只是把顺序换成 FP32 在前。
+                self.pose_model.model.fuse(verbose=False)
                 self.pose_model.model.half()
             except Exception as exc:
                 print(f"[设备] FP16 设置失败，回退 FP32：{exc}", flush=True)
