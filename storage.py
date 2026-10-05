@@ -120,6 +120,7 @@ def init_db(db_path: Optional[Path] = None) -> None:
                     avg_score REAL DEFAULT 0,
                     best_score REAL DEFAULT 0,
                     summary_json TEXT,
+                    owner_username TEXT,
                     created_at TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS session_attempts (
@@ -163,7 +164,6 @@ def init_db(db_path: Optional[Path] = None) -> None:
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
-                CREATE INDEX IF NOT EXISTS idx_sessions_owner ON training_sessions(owner_username);
                 CREATE INDEX IF NOT EXISTS idx_sessions_student ON training_sessions(student);
                 CREATE INDEX IF NOT EXISTS idx_sessions_created ON training_sessions(created_at);
                 CREATE INDEX IF NOT EXISTS idx_attempts_session ON session_attempts(session_id);
@@ -178,6 +178,8 @@ def init_db(db_path: Optional[Path] = None) -> None:
                 );
             """)
             _ensure_columns(conn)
+            # 该索引依赖 _ensure_columns 补上的 owner_username 列，必须放在补列之后
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_owner ON training_sessions(owner_username)")
             conn.commit()
             conn.execute("UPDATE training_sessions SET owner_username=student WHERE owner_username IS NULL")
             conn.commit()

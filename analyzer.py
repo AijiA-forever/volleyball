@@ -104,6 +104,7 @@ class VolleyballActionAnalyzer:
         self.last_primary_id = None
         self.frame_person_counts = []
         self.primary_id_history = []
+        self.metric_records = []  # 逐帧生物力学指标，reset_tracking 时清空
 
         # 排球追踪相关参数
         self.volleyball_history = []  # 排球历史坐标列表（最近10帧）
@@ -316,6 +317,7 @@ class VolleyballActionAnalyzer:
         valid_kpts = primary.get("keypoints") if primary else None
         if valid_kpts is not None and self.calibration_H is not None:
             valid_kpts = correct_keypoints(valid_kpts, self.calibration_H, frame.shape)
+        fresh_kpts = valid_kpts  # 本帧真实检测结果；下面可能回退为上一帧缓存
         if valid_kpts is None and self.last_valid_kpts is not None:
             valid_kpts = self.last_valid_kpts
         elif valid_kpts is not None:
@@ -328,7 +330,8 @@ class VolleyballActionAnalyzer:
         if person_id is not None:
             self.primary_id_history.append(person_id)
         try:
-            self.metric_records.append(compute_frame_metrics(valid_kpts) if valid_kpts else {})
+            # 只用本帧真实检测到的关键点：回退帧若计入会把速度类指标压成假平台
+            self.metric_records.append(compute_frame_metrics(fresh_kpts) if fresh_kpts else {})
         except Exception:
             self.metric_records.append({})
 
