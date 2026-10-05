@@ -6,7 +6,7 @@
 1) 只实现 2D 姿态可靠可测的指标（矢状面角度/角速度、重心速度、时序）；
 2) 肩关节等 2D 效度差的指标只记录原始值，不参与评分；
 3) 速度类指标统一用"身高/秒(bh/s)"归一化，便于不同身高/距离比较；
-4) 所有指标都附带文献来源（LITERATURE），便于报告自动引用。
+4) 文献来源集中在 LITERATURE 常量中，供报告与文档引用，不随每次汇总下发。
 
 主要参考文献：
 - Reeser 等 2010, Sports Health, DOI 10.1177/1941738110374624
@@ -310,7 +310,6 @@ def summarize(records: List[Dict[str, float]], fps: float = 30.0) -> Dict[str, o
         "max_trunk_inclination": round(max(_clean(trunk)), 1) if _clean(trunk) else float("nan"),
         "platform_angle_mean": round(sum(_clean(platform)) / len(_clean(platform)), 1) if _clean(platform) else float("nan"),
         "platform_angle_std": round(_std(_clean(platform)), 1) if _clean(platform) else float("nan"),
-        "literature": LITERATURE,
     }
     # JSON 安全：NaN/Inf 一律转成 None，避免前端 JSON.parse 失败
     for key, value in list(result.items()):

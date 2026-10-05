@@ -306,14 +306,9 @@ async function analyzeVideo(){
   }catch(e){ toast(e.message); }
   finally{ btn.disabled=false; $('videoProgress').textContent=''; }
 }
-function renderVideoResult(r){
-  const sum=r.summary; let fbHtml='';
-  (r.attempts||[]).forEach((a,i)=>{
-    fbHtml+='<div class="feedback"><b>第 '+(i+1)+' 个动作</b>：得分 '+a.avg_score+'，'+(a.is_standard?'标准 ✓':'需改进 ✗')+'，'+a.frames+' 帧</div>';
-    (a.feedback||[]).forEach(x=>fbHtml+='<div style="padding-left:16px">• '+x+'</div>');
-  });
-  const bio = sum.biomechanics || {};
-  const bioItems = [
+function bioMetricsHtml(sum){
+  const bio = (sum && sum.biomechanics) || {};
+  const items = [
     ['峰值膝角速度', bio.peak_knee_angular_velocity, '°/s', 'Sarvestan 2020'],
     ['峰值髋角速度', bio.peak_hip_angular_velocity, '°/s', 'Sarvestan 2020'],
     ['起跳重心速度', bio.takeoff_com_velocity_bh, 'bh/s', 'Sarvestan 2020'],
@@ -321,8 +316,16 @@ function renderVideoResult(r){
     ['落地缓冲膝角', bio.landing_knee_flexion_angle, '°', 'De Bleecker 2024'],
     ['前臂平台稳定性', bio.platform_angle_std, '°(标准差)', 'ICSSH 2020']
   ];
-  const bioHtml = bioItems.filter(function(x){ return x[1] !== null && x[1] !== undefined; })
+  return items.filter(function(x){ return x[1] !== null && x[1] !== undefined; })
     .map(function(x){ return '<div class="metric" title="依据：'+x[3]+'"><b>'+x[1]+'</b>'+x[0]+'('+x[2]+')</div>'; }).join('');
+}
+function renderVideoResult(r){
+  const sum=r.summary; let fbHtml='';
+  (r.attempts||[]).forEach((a,i)=>{
+    fbHtml+='<div class="feedback"><b>第 '+(i+1)+' 个动作</b>：得分 '+a.avg_score+'，'+(a.is_standard?'标准 ✓':'需改进 ✗')+'，'+a.frames+' 帧</div>';
+    (a.feedback||[]).forEach(x=>fbHtml+='<div style="padding-left:16px">• '+x+'</div>');
+  });
+  const bioHtml = bioMetricsHtml(sum);
   $('videoResult').innerHTML='<h4 style="margin:10px 0">分析结果</h4><video src="'+r.video_url+'" controls></video><div class="metric"><b>'+sum.average_score+'</b>平均分</div><div class="metric"><b>'+(sum.best_score!==undefined?sum.best_score:0)+'</b>最高分</div><div class="metric"><b>'+sum.action_count+'</b>动作数</div><div class="metric"><b>'+sum.standard_count+'</b>标准数</div><div class="metric"><b>'+sum.total_frames+'</b>总帧数</div><div class="metric"><b>'+(sum.max_person_count||1)+'</b>画面最多人数</div><div class="metric"><b>'+((sum.primary_ids||[]).join(',')||'-')+'</b>主分析ID</div><div class="metric"><b>'+(sum.encoding_dropped_frames||0)+'</b>编码丢帧</div>'+bioHtml+'<canvas id="scoreChart"></canvas>'+(sum.encoding_error?'<div style="color:#d1242f">视频编码错误：'+sum.encoding_error+'</div>':'')+fbHtml; drawScoreChart(sum.score_curve);
 }
 
@@ -657,7 +660,7 @@ function renderCameraSummary(d){
           '<div class="metric"><b>'+(s.best_score||0)+'</b>最高分</div>'+
           '<div class="metric"><b>'+(s.action_count||0)+'</b>动作数</div>'+
           '<div class="metric"><b>'+(s.standard_count||0)+'</b>标准数</div>'+
-          '<div class="metric"><b>'+(s.dropped_frames||0)+'</b>录制丢帧</div>';
+          '<div class="metric"><b>'+(s.dropped_frames||0)+'</b>录制丢帧</div>'+bioMetricsHtml(s);
   if(s.recorder_error){ html += '<div style="color:#d1242f">录像错误：'+s.recorder_error+'</div>'; }
   if(d.session_id){ html += '<div>训练记录编号：#'+d.session_id+'，已写入“我的训练记录”。</div>'; }
   else { html += '<div class="empty">本次没有采集到有效帧</div>'; }

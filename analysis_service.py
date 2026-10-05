@@ -227,7 +227,7 @@ class AnalysisService:
                 "size": None,
                 "frame_count": 0,
                 "scores": [],
-                "started_ts": time.time(),
+                "frame_ts": [],  # 逐帧到达时间戳，用于估计真实帧率
                 "started_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             }
             return {"ok": True, "student": self._rt["student"], "action_type": action_type}
@@ -254,6 +254,7 @@ class AnalysisService:
                 output = cv2.resize(annotated, rt["size"], interpolation=cv2.INTER_AREA)
             rt["recorder"].write(output)
             rt["frame_count"] += 1
+            rt["frame_ts"].append(time.time())
             score = float(judgment.get("total_score", 0) or 0) if judgment else 0.0
             rt["scores"].append(score)
             summary = analyzer.action_session.get_summary()
@@ -281,6 +282,18 @@ class AnalysisService:
                     "feedback": (judgment or {}).get("feedback", []),
                 },
             }
+
+    @staticmethod
+    def _estimate_frame_rate(frame_ts) -> float:
+        """用逐帧到达间隔的中位数估计帧率：中位数不受中途停顿产生的长间隔影响。"""
+        deltas = sorted(b - a for a, b in zip(frame_ts, frame_ts[1:]) if b > a)
+        if not deltas:
+            return 30.0
+        mid = len(deltas) // 2
+        step = deltas[mid] if len(deltas) % 2 else (deltas[mid - 1] + deltas[mid]) / 2.0
+        if step <= 0:
+            return 30.0
+        return min(120.0, max(1.0, 1.0 / step))
 
     def _finalize_realtime_locked(self) -> Optional[Dict[str, Any]]:
         rt = self._rt
@@ -314,12 +327,8 @@ class AnalysisService:
             video_url = f"/results/realtime_videos/{_safe_dir(rt['owner'])}/{Path(out_path).name}"
         summary = dict(summary)
         summary.update(analyzer.tracking_summary())
-        try:
-            elapsed = max(0.1, time.time() - rt.get("started_ts", time.time()))
-            fps_est = (rt["frame_count"] / elapsed) if rt["frame_count"] else 30.0
-        except Exception:
-            fps_est = 30.0
-        summary["biomechanics"] = analyzer.biomechanics_summary(fps=fps_est)
+        summary["biomechanics"] = analyzer.biomechanics_summary(
+            fps=self._estimate_frame_rate(rt.get("frame_ts") or []))
         summary.update({
             "mode": "realtime",
             "started_at": rt["started_at"],
