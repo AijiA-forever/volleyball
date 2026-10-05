@@ -3,7 +3,7 @@
 
 
 class SimpleTracker:
-    def __init__(self, iou_threshold=0.25, max_lost=30):
+    def __init__(self, iou_threshold=0.25, max_lost=10):
         self.iou_threshold = iou_threshold
         self.max_lost = max_lost
         self.tracks = {}
