@@ -170,7 +170,7 @@ def main():
     collect_clips = clip_matrix = compare_matrices = None
     dtw_template, dtw_meta, dtw_action = None, {}, None
     if args.dtw_template:
-        from temporal import clip_matrix, collect_clips, compare_matrices, load_template
+        from temporal import clip_matrix, collect_clips, compare_matrices, load_template, settings_mismatch
         try:
             dtw_template, dtw_action, dtw_meta = load_template(Path(args.dtw_template))
         except Exception as exc:
@@ -180,10 +180,13 @@ def main():
               f"来自 {dtw_meta.get('n_clips', '?')} 个动作，类型 {dtw_action}）")
         if args.action and dtw_action and args.action != dtw_action:
             print(f"  注意：模板动作类型为 {dtw_action}，而 --action 指定为 {args.action}，两者不一致")
+        if dtw_meta.get("settings"):
+            print(f"  模板推理配置: {dtw_meta['settings']}（对比时必须保持一致，否则相似度不可比）")
         print("  启用时序通道后每个视频会再跑一遍分析，总耗时约翻倍")
 
     service = AnalysisService()
     results, inter_pairs = [], []
+    settings_warned = False
     for i, (video_name, group) in enumerate(groups.items(), 1):
         video = Path(args.videos) / video_name
         if not video.exists():
@@ -203,6 +206,13 @@ def main():
             video_action = group["action"] or args.action
             try:
                 collector, _fps = collect_clips(video, video_action, min_frames=args.min_frames)
+                if not settings_warned:
+                    mismatches = settings_mismatch(dtw_meta.get("settings"), collector.settings)
+                    if mismatches:
+                        print("  注意：当前推理配置与建模板时不一致，时序相似度不可直接比较：")
+                        for item in mismatches:
+                            print("    -", item)
+                    settings_warned = True
                 sims = [compare_matrices(clip_matrix(c), dtw_template, tau=args.tau)["similarity"]
                         for c in collector.clips]
                 temporal_clips = len(sims)

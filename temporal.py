@@ -117,6 +117,7 @@ class SequenceCollector:
 
     def __init__(self, min_frames: int = MIN_CLIP_FRAMES):
         self.min_frames = min_frames
+        self.settings: dict = {}  # 本次采集使用的推理配置，用于模板一致性校验
         self.reset()
 
     def reset(self) -> None:
@@ -249,16 +250,35 @@ def load_template(path: Path):
     return data["matrix"], str(data["action_type"]), json.loads(str(data["meta"]))
 
 
+def settings_mismatch(template_settings, current_settings) -> list:
+    """比较建模板与对比时用的推理配置，返回不一致的项描述。
+
+    关键点会随推理尺寸/置信度阈值变化，进而改变切分边界和特征数值，
+    两边配置不同时相似度不可比（实测同一段视频会从 100 分掉到 65 分）。
+    """
+    if not template_settings:
+        return []
+    return [f"{key}: 模板 {template_settings.get(key)} vs 当前 {current_settings.get(key)}"
+            for key in template_settings if current_settings.get(key) != template_settings[key]]
+
+
 def collect_clips(video: Path, action_type: str = "dig", min_frames: int = MIN_CLIP_FRAMES):
     """用现有分析器跑一遍视频并采集动作序列（不写结果视频、不落库）。"""
     import cv2
 
-    from analyzer import ActionSession, VolleyballActionAnalyzer
+    from analyzer import (
+        BALL_CONF, BALL_IMGSZ, POSE_CONF, POSE_IMGSZ,
+        ActionSession, VolleyballActionAnalyzer,
+    )
 
     analyzer = VolleyballActionAnalyzer(detect_volleyball=True)
     analyzer.action_session = ActionSession(action_type)
     analyzer.reset_tracking()
     collector = SequenceCollector(min_frames=min_frames)
+    collector.settings = {
+        "pose_imgsz": POSE_IMGSZ, "pose_conf": POSE_CONF,
+        "ball_imgsz": BALL_IMGSZ, "ball_conf": BALL_CONF,
+    }
     cap = cv2.VideoCapture(str(video))
     if not cap.isOpened():
         raise RuntimeError(f"无法打开视频: {video}")
@@ -376,9 +396,10 @@ def main() -> int:
         if not videos:
             print("目录里没有视频文件:", args.videos)
             return 1
-        matrices, sources = [], []
+        matrices, sources, settings_seen = [], [], {}
         for video in videos:
             collector, fps = collect_clips(video, action, min_frames=args.min_frames)
+            settings_seen = collector.settings
             for clip in collector.clips:
                 matrices.append(clip_matrix(clip))
                 sources.append(video.name)
@@ -393,6 +414,7 @@ def main() -> int:
         matrix, meta = build_template(matrices)
         meta["sources"] = sources
         meta["action_type"] = action
+        meta["settings"] = settings_seen
         save_template(Path(args.out), matrix, action, meta)
         print(f"模板已保存: {args.out}（{matrix.shape[0]} 帧 × {matrix.shape[1]} 维，来自 {meta['n_clips']} 个动作）")
         return 0
@@ -401,6 +423,11 @@ def main() -> int:
         parser.error("需要 --video 与 --template（或用 --build-template / --self-test）")
     template, action_type, meta = load_template(Path(args.template))
     collector, fps = collect_clips(Path(args.video), args.action or action_type, min_frames=args.min_frames)
+    mismatches = settings_mismatch(meta.get("settings"), collector.settings)
+    if mismatches:
+        print("注意：当前推理配置与建模板时不一致，相似度不可直接比较（关键点会变，切分边界也会变）：")
+        for item in mismatches:
+            print("  -", item)
     if not collector.clips:
         print("没有采集到有效动作序列。")
         print("最常见原因：视频里没有排球，或球检测不到——现有切分依赖球与手臂的距离和球的折返轨迹。")
