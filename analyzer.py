@@ -295,9 +295,12 @@ class VolleyballActionAnalyzer:
             self.set_calibration(calibration)
 
         # verbose=False：关闭 ultralytics 的逐帧推理摘要打印（原先每帧写一次控制台）
-        # 注意：不再传已废弃的 half 参数；FP16 在 __init__ 里通过 model.half() 设置
+        # half 必须在 predict 时传入：ultralytics 在 setup_model 里按这个参数决定精度
+        # （autobackend: `model.half() if fp16 else model.float()`），只在 __init__ 里调
+        # model.half() 会被这里的 model.float() 覆盖掉，等于没开 FP16。
+        # 传入后执行顺序为 融合(已在 __init__ 完成) → 搬到显卡 → 转半精度，顺序正确。
         results = self.pose_model(frame, imgsz=POSE_IMGSZ, conf=POSE_CONF,
-                                  device=self.device, verbose=False)
+                                  device=self.device, half=self.half, verbose=False)
         persons = extract_persons(results)
         track_ids = self.tracker.update([p["bbox"] for p in persons]) if persons else []
         for person, tid in zip(persons, track_ids):
