@@ -50,6 +50,22 @@ FEATURE_KEYS = ANGLE_KEYS + DERIVED_KEYS + POS_KEYS
 # 各维度在算距离前的缩放：角度按 90°、位置按 0.25 倍身高换算到同一量级
 SCALES = [90.0] * (len(ANGLE_KEYS) + len(DERIVED_KEYS)) + [0.25] * len(POS_KEYS)
 MIN_CLIP_FRAMES = 4
+DEFAULT_MAX_LEN_RATIO = 3.0
+
+
+def drop_long_clips(clips: list, max_ratio: float = DEFAULT_MAX_LEN_RATIO):
+    """剔除明显超长的动作区间，返回 (保留的区间, 剔除数量)。
+
+    状态机偶尔不会退出（球一直停在手臂附近等），会把连续多个动作粘成一段。
+    以本视频区间长度的中位数为基准，超过 max_ratio 倍视为异常；max_ratio<=0 关闭。
+    """
+    if max_ratio <= 0 or len(clips) < 3:
+        return list(clips), 0
+    lengths = sorted(len(c) for c in clips)
+    median = lengths[len(lengths) // 2]
+    cap = max(int(round(median * max_ratio)), median + 2)
+    kept = [c for c in clips if len(c) <= cap]
+    return kept, len(clips) - len(kept)
 
 
 def _mid(p, q):
@@ -126,6 +142,7 @@ class SequenceCollector:
         self._last_count = 0
         self.clips: list = []  # 每个元素为逐帧特征字典列表
         self.rejected = 0      # 未被计为动作的区间数
+        self.dropped_long = 0  # 因超长被剔除的区间数
 
     def update(self, session_info, valid_kpts) -> None:
         info = session_info or {}
@@ -262,7 +279,8 @@ def settings_mismatch(template_settings, current_settings) -> list:
             for key in template_settings if current_settings.get(key) != template_settings[key]]
 
 
-def collect_clips(video: Path, action_type: str = "dig", min_frames: int = MIN_CLIP_FRAMES):
+def collect_clips(video: Path, action_type: str = "dig", min_frames: int = MIN_CLIP_FRAMES,
+                  max_len_ratio: float = DEFAULT_MAX_LEN_RATIO):
     """用现有分析器跑一遍视频并采集动作序列（不写结果视频、不落库）。"""
     import cv2
 
@@ -291,6 +309,7 @@ def collect_clips(video: Path, action_type: str = "dig", min_frames: int = MIN_C
         collector.update(info, kpts)
     cap.release()
     collector.finish()
+    collector.clips, collector.dropped_long = drop_long_clips(collector.clips, max_len_ratio)
     return collector, float(fps)
 
 
@@ -381,6 +400,8 @@ def main() -> int:
     parser.add_argument("--band-ratio", type=float, default=0.25, help="DTW 弯曲带宽度比例")
     parser.add_argument("--min-frames", type=int, default=MIN_CLIP_FRAMES,
                         help=f"动作区间的最少帧数，低于该值不计入（默认 {MIN_CLIP_FRAMES}）")
+    parser.add_argument("--max-len-ratio", type=float, default=DEFAULT_MAX_LEN_RATIO,
+                        help=f"动作区间长度上限，超过本视频中位帧数的该倍数即剔除，0=关闭（默认 {DEFAULT_MAX_LEN_RATIO:g}）")
     args = parser.parse_args()
 
     if args.self_test:
@@ -398,12 +419,14 @@ def main() -> int:
             return 1
         matrices, sources, settings_seen = [], [], {}
         for video in videos:
-            collector, fps = collect_clips(video, action, min_frames=args.min_frames)
+            collector, fps = collect_clips(video, action, min_frames=args.min_frames,
+                                           max_len_ratio=args.max_len_ratio)
             settings_seen = collector.settings
             for clip in collector.clips:
                 matrices.append(clip_matrix(clip))
                 sources.append(video.name)
-            print(f"  {video.name}: 采集 {len(collector.clips)} 个动作（{fps:.1f} fps）")
+            note = f"，另剔除 {collector.dropped_long} 个超长区间" if collector.dropped_long else ""
+            print(f"  {video.name}: 采集 {len(collector.clips)} 个动作{note}（{fps:.1f} fps）")
         if not matrices:
             print("\n没有采集到任何动作区间，无法建立模板。")
             print("最常见原因：视频里没有排球，或球太小/被遮挡导致检测不到。")
@@ -422,7 +445,8 @@ def main() -> int:
     if not args.video or not args.template:
         parser.error("需要 --video 与 --template（或用 --build-template / --self-test）")
     template, action_type, meta = load_template(Path(args.template))
-    collector, fps = collect_clips(Path(args.video), args.action or action_type, min_frames=args.min_frames)
+    collector, fps = collect_clips(Path(args.video), args.action or action_type,
+                                   min_frames=args.min_frames, max_len_ratio=args.max_len_ratio)
     mismatches = settings_mismatch(meta.get("settings"), collector.settings)
     if mismatches:
         print("注意：当前推理配置与建模板时不一致，相似度不可直接比较（关键点会变，切分边界也会变）：")
@@ -434,7 +458,8 @@ def main() -> int:
         print("也可能是 --action 选错，或动作未完整入镜。")
         return 1
     print(f"模板: {args.template}（{template.shape[0]} 帧，来自 {meta.get('n_clips', '?')} 个动作）")
-    print(f"视频: {args.video}（{fps:.1f} fps，采集 {len(collector.clips)} 个动作）")
+    note = f"，另剔除 {collector.dropped_long} 个超长区间" if collector.dropped_long else ""
+    print(f"视频: {args.video}（{fps:.1f} fps，采集 {len(collector.clips)} 个动作{note}）")
     scores = []
     for i, clip in enumerate(collector.clips, 1):
         result = compare_matrices(clip_matrix(clip), template, tau=args.tau, band_ratio=args.band_ratio)

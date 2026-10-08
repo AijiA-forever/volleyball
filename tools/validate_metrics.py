@@ -144,6 +144,8 @@ def main():
     parser.add_argument("--dtw-template", help="时序模板 .npz（可选，提供后同时评估 DTW 相似度通道）")
     parser.add_argument("--tau", type=float, default=1.0, help="DTW 相似度映射尺度，需与建模板时一致")
     parser.add_argument("--min-frames", type=int, default=8, help="时序通道动作区间最少帧数（默认 8，过滤切分不完整的片段）")
+    parser.add_argument("--max-len-ratio", type=float, default=3.0,
+                        help="时序通道动作区间长度上限（相对本视频中位帧数的倍数，0=关闭）")
     parser.add_argument("--out", default=str(ROOT / "validation"), help="输出目录")
     parser.add_argument("--limit", type=int, default=0, help="最多处理多少个视频（0=全部）")
     parser.add_argument("--system-max", type=float, default=100.0, help="系统评分满分（默认 100）")
@@ -205,7 +207,10 @@ def main():
         if dtw_template is not None:
             video_action = group["action"] or args.action
             try:
-                collector, _fps = collect_clips(video, video_action, min_frames=args.min_frames)
+                collector, _fps = collect_clips(video, video_action, min_frames=args.min_frames,
+                                                max_len_ratio=args.max_len_ratio)
+                if collector.dropped_long:
+                    print(f"  剔除 {collector.dropped_long} 个超长区间（疑似切分未退出）")
                 if not settings_warned:
                     mismatches = settings_mismatch(dtw_meta.get("settings"), collector.settings)
                     if mismatches:
