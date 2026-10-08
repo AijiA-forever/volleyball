@@ -68,12 +68,11 @@ def extract_frame_features(kpts) -> dict:
         value = base.get(key)
         if value is not None and not math.isnan(value):
             feats[key] = float(value)
-    # 前臂平台是一条无向线段：左右手顺序互换等价于旋转 180°，直接比较 atan2
-    # 会产生 340°/180° 的假偏差。按 180° 取模再折到 [0,90]，对两种翻转都保持不变。
-    tilt = base.get("platform_angle")
+    # 前臂平台倾角由 metrics 折叠到 [0,90]（无向线段，左右手顺序互换等价于旋转 180°），
+    # 与生物力学汇总共用同一定义，避免两处各写一份折叠逻辑。
+    tilt = base.get("platform_tilt")
     if tilt is not None and not math.isnan(tilt):
-        folded = abs(float(tilt)) % 180.0
-        feats["platform_tilt"] = min(folded, 180.0 - folded)
+        feats["platform_tilt"] = float(tilt)
     bh = base.get("body_height_px")
     ankle = _mid(kpts.get("left_ankle"), kpts.get("right_ankle"))
     hip = _mid(kpts.get("left_hip"), kpts.get("right_hip"))

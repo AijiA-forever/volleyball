@@ -67,6 +67,17 @@ def body_height_px(kpts) -> Optional[float]:
     return None
 
 
+def _fold_platform_angle(deg: float) -> float:
+    """把无向线段的角度折到 [0, 90]。
+
+    前臂平台是一条无向线段：左右手在图像中的先后顺序互换等价于旋转 180°，
+    atan2 的符号翻转也等价于镜像。取模 180° 再折到锐角一侧后，这些等价姿态
+    给出同一个值，跨 ±180° 的平均与标准差才有意义。
+    """
+    folded = abs(deg) % 180.0
+    return min(folded, 180.0 - folded)
+
+
 def compute_frame_metrics(kpts: Dict[str, tuple]) -> Dict[str, float]:
     """单帧指标：关节角度 + 平台角度 + 重心/腕部位置。"""
     out: Dict[str, float] = {}
@@ -94,6 +105,7 @@ def compute_frame_metrics(kpts: Dict[str, tuple]) -> Dict[str, float]:
         dx = rw[0] - lw[0]
         dy = rw[1] - lw[1]
         out["platform_angle"] = math.degrees(math.atan2(dy, dx))
+        out["platform_tilt"] = _fold_platform_angle(out["platform_angle"])
     bh = body_height_px(kpts)
     if bh:
         out["body_height_px"] = bh
@@ -198,10 +210,18 @@ def _sanitize_records(records):
             if v is not None and (math.isnan(v) or v < -1.0 or v > 3.0):
                 r.pop(key, None)
         for key in list(r.keys()):
-            if key.endswith("_angle"):
-                v = r[key]
-                if v is None or math.isnan(v) or v < 0.0 or v > 180.0:
+            if not key.endswith("_angle"):
+                continue
+            v = r[key]
+            if v is None or math.isnan(v):
+                r.pop(key, None)
+            elif key == "platform_angle":
+                # 两腕连线的 atan2 取值就是 -180..180，不能按关节角的 0..180 校验，
+                # 否则负值帧会被整帧丢弃，平台统计只剩一半数据。
+                if v < -180.0 or v > 180.0:
                     r.pop(key, None)
+            elif v < 0.0 or v > 180.0:
+                r.pop(key, None)
         valid += 1
     return valid
 
@@ -239,7 +259,7 @@ def summarize(records: List[Dict[str, float]], fps: float = 30.0) -> Dict[str, o
     hip_y = pos_series("hip_y_px")
     wrist_y = pos_series("wrist_y_px")
     trunk = series("trunk_inclination")
-    platform = series("platform_angle", smooth=False)
+    platform_tilt = series("platform_tilt", smooth=False)
 
     knee_vel = _diff_series(knee, fps)          # 角速度 deg/s
     hip_vel = _diff_series(hip, fps)
@@ -308,8 +328,8 @@ def summarize(records: List[Dict[str, float]], fps: float = 30.0) -> Dict[str, o
         "landing_knee_flexion_velocity": round(abs(landing_knee_vel), 1) if not math.isnan(landing_knee_vel) else float("nan"),
         "min_knee_angle": round(min(_clean(knee)), 1) if _clean(knee) else float("nan"),
         "max_trunk_inclination": round(max(_clean(trunk)), 1) if _clean(trunk) else float("nan"),
-        "platform_angle_mean": round(sum(_clean(platform)) / len(_clean(platform)), 1) if _clean(platform) else float("nan"),
-        "platform_angle_std": round(_std(_clean(platform)), 1) if _clean(platform) else float("nan"),
+        "platform_tilt_mean": round(sum(_clean(platform_tilt)) / len(_clean(platform_tilt)), 1) if _clean(platform_tilt) else float("nan"),
+        "platform_tilt_std": round(_std(_clean(platform_tilt)), 1) if _clean(platform_tilt) else float("nan"),
     }
     # JSON 安全：NaN/Inf 一律转成 None，避免前端 JSON.parse 失败
     for key, value in list(result.items()):

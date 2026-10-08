@@ -36,7 +36,7 @@ BIO_KEYS = [
     "peak_knee_angular_velocity", "peak_hip_angular_velocity", "peak_elbow_angular_velocity",
     "takeoff_com_velocity_bh", "jump_height_bh",
     "landing_knee_flexion_angle", "landing_knee_flexion_velocity",
-    "min_knee_angle", "max_trunk_inclination", "platform_angle_std",
+    "min_knee_angle", "max_trunk_inclination", "platform_tilt_std",
 ]
 TEMPLATE_HEADER = ["video", "student", "action", "cam_view", "coach_id", "reps", "overall_score",
                    "standard_flag"] + SUB_KEYS + ["notes"]

@@ -314,7 +314,7 @@ function bioMetricsHtml(sum){
     ['起跳重心速度', bio.takeoff_com_velocity_bh, 'bh/s', 'Sarvestan 2020'],
     ['起跳高度', bio.jump_height_bh, 'bh', 'Sarvestan 2020'],
     ['落地缓冲膝角', bio.landing_knee_flexion_angle, '°', 'De Bleecker 2024'],
-    ['前臂平台稳定性', bio.platform_angle_std, '°(标准差)', 'ICSSH 2020']
+    ['前臂平台稳定性', bio.platform_tilt_std, '°(标准差)', 'ICSSH 2020']
   ];
   return items.filter(function(x){ return x[1] !== null && x[1] !== undefined; })
     .map(function(x){ return '<div class="metric" title="依据：'+x[3]+'"><b>'+x[1]+'</b>'+x[0]+'('+x[2]+')</div>'; }).join('');
