@@ -383,6 +383,13 @@ def main() -> int:
                 matrices.append(clip_matrix(clip))
                 sources.append(video.name)
             print(f"  {video.name}: 采集 {len(collector.clips)} 个动作（{fps:.1f} fps）")
+        if not matrices:
+            print("\n没有采集到任何动作区间，无法建立模板。")
+            print("最常见原因：视频里没有排球，或球太小/被遮挡导致检测不到。")
+            print("现有切分依赖排球轨迹（进入区间要求“球与手臂距离 < 1.3 倍身高，且球在手腕上方”），")
+            print("画面里没有球时状态机不会启动，一个区间也切不出来。")
+            print("请依次检查：1) 示范时是否带球；2) --action 是否选对；3) 视频是否太短、人物是否完整入镜。")
+            return 1
         matrix, meta = build_template(matrices)
         meta["sources"] = sources
         meta["action_type"] = action
@@ -395,7 +402,9 @@ def main() -> int:
     template, action_type, meta = load_template(Path(args.template))
     collector, fps = collect_clips(Path(args.video), args.action or action_type, min_frames=args.min_frames)
     if not collector.clips:
-        print("没有采集到有效动作序列（切分未触发或被判为无效动作）")
+        print("没有采集到有效动作序列。")
+        print("最常见原因：视频里没有排球，或球检测不到——现有切分依赖球与手臂的距离和球的折返轨迹。")
+        print("也可能是 --action 选错，或动作未完整入镜。")
         return 1
     print(f"模板: {args.template}（{template.shape[0]} 帧，来自 {meta.get('n_clips', '?')} 个动作）")
     print(f"视频: {args.video}（{fps:.1f} fps，采集 {len(collector.clips)} 个动作）")
