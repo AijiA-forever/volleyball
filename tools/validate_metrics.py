@@ -141,6 +141,9 @@ def main():
     parser.add_argument("--ratings", help="教练评分 CSV")
     parser.add_argument("--action", default="dig", help="动作类型：dig/serve/set/spike")
     parser.add_argument("--template", help="生成评分模板 CSV 后退出")
+    parser.add_argument("--dtw-template", help="时序模板 .npz（可选，提供后同时评估 DTW 相似度通道）")
+    parser.add_argument("--tau", type=float, default=1.0, help="DTW 相似度映射尺度，需与建模板时一致")
+    parser.add_argument("--min-frames", type=int, default=8, help="时序通道动作区间最少帧数（默认 8，过滤切分不完整的片段）")
     parser.add_argument("--out", default=str(ROOT / "validation"), help="输出目录")
     parser.add_argument("--limit", type=int, default=0, help="最多处理多少个视频（0=全部）")
     parser.add_argument("--system-max", type=float, default=100.0, help="系统评分满分（默认 100）")
@@ -164,6 +167,21 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     from analysis_service import AnalysisService
+    collect_clips = clip_matrix = compare_matrices = None
+    dtw_template, dtw_meta, dtw_action = None, {}, None
+    if args.dtw_template:
+        from temporal import clip_matrix, collect_clips, compare_matrices, load_template
+        try:
+            dtw_template, dtw_action, dtw_meta = load_template(Path(args.dtw_template))
+        except Exception as exc:
+            print("时序模板加载失败:", exc)
+            return 1
+        print(f"时序模板: {args.dtw_template}（{dtw_template.shape[0]} 帧 × {dtw_template.shape[1]} 维，"
+              f"来自 {dtw_meta.get('n_clips', '?')} 个动作，类型 {dtw_action}）")
+        if args.action and dtw_action and args.action != dtw_action:
+            print(f"  注意：模板动作类型为 {dtw_action}，而 --action 指定为 {args.action}，两者不一致")
+        print("  启用时序通道后每个视频会再跑一遍分析，总耗时约翻倍")
+
     service = AnalysisService()
     results, inter_pairs = [], []
     for i, (video_name, group) in enumerate(groups.items(), 1):
@@ -180,11 +198,24 @@ def main():
             continue
         summary = res.get("summary") or {}
         bio = summary.get("biomechanics") or {}
+        temporal_score, temporal_clips = None, 0
+        if dtw_template is not None:
+            video_action = group["action"] or args.action
+            try:
+                collector, _fps = collect_clips(video, video_action, min_frames=args.min_frames)
+                sims = [compare_matrices(clip_matrix(c), dtw_template, tau=args.tau)["similarity"]
+                        for c in collector.clips]
+                temporal_clips = len(sims)
+                temporal_score = round(sum(sims) / len(sims), 1) if sims else None
+            except Exception as exc:
+                print("  时序通道失败:", exc)
         row = {
             "video": video_name,
             "coach_score": mean_or_none(group["scores"]),
             "coach_n": len(group["scores"]),
             "system_score": summary.get("average_score"),
+            "temporal_score": temporal_score,
+            "temporal_clips": temporal_clips,
             "action_count": summary.get("action_count"),
         }
         for key in SUB_KEYS:
@@ -202,10 +233,20 @@ def main():
     system = [r["system_score"] or 0 for r in results]
     coach = [r["coach_score"] or 0 for r in results]
     system_scaled = [v / args.system_max * args.coach_max for v in system]
+    temporal_pairs = [(r["temporal_score"], r["coach_score"]) for r in results
+                      if r.get("temporal_score") is not None and r.get("coach_score") is not None]
+    temporal_ready = len(temporal_pairs) >= 3
+    if temporal_ready:
+        temporal_scaled = [p[0] / 100.0 * args.coach_max for p in temporal_pairs]
+        temporal_coach = [p[1] for p in temporal_pairs]
 
     report = ["# 生物力学指标验证报告\n\n"]
     report.append(f"- 样本量：{len(results)}\n- 动作：{args.action}\n")
     report.append(f"- 尺度换算：系统分 {args.system_max:g} 分制 → 教练 {args.coach_max:g} 分制\n")
+    if dtw_template is not None:
+        report.append(f"- 时序模板：`{args.dtw_template}`（{dtw_template.shape[0]} 帧，"
+                      f"来自 {dtw_meta.get('n_clips', '?')} 个动作，tau={args.tau:g}，"
+                      f"min_frames={args.min_frames}）\n")
     report.append(f"- 系统分 vs 教练分 Pearson r = **{pearson(system_scaled, coach):.3f}**\n")
     report.append(f"- 系统分 vs 教练分 Spearman ρ = **{spearman(system_scaled, coach):.3f}**\n")
     report.append(f"- ICC(2,1) 绝对一致性 = **{icc_2_1(np.column_stack([system_scaled, coach])):.3f}**\n")
@@ -214,6 +255,46 @@ def main():
     if len(inter_pairs) >= 3:
         report.append(f"- 教练之间 ICC(2,1)（{len(inter_pairs)} 个视频 × 2 名教练）= **{icc_2_1(np.array(inter_pairs, dtype=float)):.3f}**\n")
 
+    if dtw_template is not None:
+        report.append("\n## 两通道与教练评分的一致性对比\n\n")
+        report.append("| 通道 | 样本量 | Pearson r | Spearman ρ | ICC(2,1) |\n| --- | --- | --- | --- | --- |\n")
+        report.append(f"| 阈值通道（系统平均分） | {len(results)} | {pearson(system_scaled, coach):.3f} | "
+                      f"{spearman(system_scaled, coach):.3f} | {icc_2_1(np.column_stack([system_scaled, coach])):.3f} |\n")
+        if temporal_ready:
+            report.append(f"| 时序通道（DTW 相似度） | {len(temporal_pairs)} | {pearson(temporal_scaled, temporal_coach):.3f} | "
+                          f"{spearman(temporal_scaled, temporal_coach):.3f} | "
+                          f"{icc_2_1(np.column_stack([temporal_scaled, temporal_coach])):.3f} |\n")
+        else:
+            report.append(f"| 时序通道（DTW 相似度） | {len(temporal_pairs)} | 样本不足 | 样本不足 | - |\n")
+        report.append("\n")
+        if temporal_ready:
+            rho_sys = spearman(system_scaled, coach)
+            rho_tmp = spearman(temporal_scaled, temporal_coach)
+            report.append(f"- 阈值通道 Spearman ρ = {rho_sys:+.3f}，时序通道 ρ = {rho_tmp:+.3f}"
+                          f"（正=与教练评分同向，负=反向）\n")
+            diff = abs(rho_tmp) - abs(rho_sys)
+            if diff > 0.05:
+                better = "时序通道"
+            elif diff < -0.05:
+                better = "阈值通道"
+            else:
+                better = None
+            if better:
+                report.append(f"按 Spearman 绝对值比较，**{better}** 与教练评分更一致"
+                              f"（{max(abs(rho_sys), abs(rho_tmp)):.3f} 对 {min(abs(rho_sys), abs(rho_tmp)):.3f}）。\n\n")
+            else:
+                report.append("两通道与教练评分的一致性**相当**（差值不足 0.05），当前样本量下无法区分优劣。\n\n")
+            for name, rho in (("阈值通道", rho_sys), ("时序通道", rho_tmp)):
+                if rho < -0.05:
+                    report.append(f"- 注意：{name}与教练评分**反向**（ρ={rho:+.3f}），分数越高教练评分反而越低，"
+                                  f"说明该通道的分数方向或判据有问题，不能当作“一致”来解读。\n")
+            report.append("- 前提：先看教练之间的 ICC 是否 ≥0.6，否则说明“标准”本身缺少共识，两个通道都无法“符合实际”。\n")
+            report.append("- ICC(2,1) 是绝对一致性，要求两把尺子的量纲与零点都一致；本工具只做线性换算，"
+                          "不会消除系统性偏差，因此 ICC 低于相关系数属于正常现象，不要据 ICC 否定通道。\n")
+            report.append("- 样本量小时相关系数波动很大，结论需要更多样本复现。\n")
+        else:
+            report.append("时序通道有效样本不足 3 个，无法计算相关性。\n")
+
     report.append("\n## 各指标与教练评分的相关性\n\n| 指标 | Pearson r |\n| --- | --- |\n")
     for key in BIO_KEYS + SUB_KEYS:
         values = [r.get(key) for r in results]
@@ -221,11 +302,19 @@ def main():
         if len(pairs) >= 3:
             report.append(f"| {key} | {pearson([p[0] for p in pairs], [p[1] for p in pairs]):.3f} |\n")
 
-    report.append("\n## 逐样本数据\n\n| 视频 | 教练分 | 系统分 | 峰值膝角速度 | 起跳重心速度 | 落地膝角 |\n| --- | --- | --- | --- | --- | --- |\n")
-    for r in results:
-        report.append(f"| {r['video']} | {r['coach_score']} | {r['system_score']} | "
-                      f"{r['peak_knee_angular_velocity']} | {r['takeoff_com_velocity_bh']} | "
-                      f"{r['landing_knee_flexion_angle']} |\n")
+    if dtw_template is not None:
+        report.append("\n## 逐样本数据\n\n| 视频 | 教练分 | 系统分 | 时序相似度 | 时序动作数 | 峰值膝角速度 | 起跳重心速度 | 落地膝角 |\n"
+                      "| --- | --- | --- | --- | --- | --- | --- | --- |\n")
+        for r in results:
+            report.append(f"| {r['video']} | {r['coach_score']} | {r['system_score']} | {r['temporal_score']} | "
+                          f"{r['temporal_clips']} | {r['peak_knee_angular_velocity']} | {r['takeoff_com_velocity_bh']} | "
+                          f"{r['landing_knee_flexion_angle']} |\n")
+    else:
+        report.append("\n## 逐样本数据\n\n| 视频 | 教练分 | 系统分 | 峰值膝角速度 | 起跳重心速度 | 落地膝角 |\n| --- | --- | --- | --- | --- | --- |\n")
+        for r in results:
+            report.append(f"| {r['video']} | {r['coach_score']} | {r['system_score']} | "
+                          f"{r['peak_knee_angular_velocity']} | {r['takeoff_com_velocity_bh']} | "
+                          f"{r['landing_knee_flexion_angle']} |\n")
 
     (out_dir / "validation_report.md").write_text("".join(report), encoding="utf-8")
     with (out_dir / "validation_metrics.csv").open("w", newline="", encoding="utf-8-sig") as fh:
@@ -234,6 +323,12 @@ def main():
         writer.writerows(results)
     print("\n报告:", out_dir / "validation_report.md")
     print("数据:", out_dir / "validation_metrics.csv")
+    if dtw_template is not None:
+        print(f"阈值通道 Spearman ρ = {spearman(system_scaled, coach):.3f}")
+        if temporal_ready:
+            print(f"时序通道 Spearman ρ = {spearman(temporal_scaled, temporal_coach):.3f}")
+        else:
+            print("时序通道有效样本不足 3 个")
     return 0
 
 
