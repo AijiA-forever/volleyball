@@ -400,7 +400,7 @@ class VolleyballActionAnalyzer:
 from pose_judge import generate_feedback
 
 class ActionSession:
-    def __init__(self, action_type="dig"):
+    def __init__(self, action_type="dig", entry_ref="body", entry_multiplier=1.3):
         self.action_type = action_type
         self.is_active = False          # 动作是否正在进行
         self.current_period_data = []   # 存储当前动作区间的详情
@@ -410,14 +410,38 @@ class ActionSession:
 
         # 区间记录相关
         self.interval_records = []     # 当前区间的记录列表 [{'distance': ..., 'volleyball_y': ..., 'total_score': ..., 'score_details': ...}, ...]
-        self.entry_threshold_multiplier = 1.3  # 进入阈值（身高倍数）
-        self.rebound_threshold_multiplier = 0.5  # 折返判定阈值（身高倍数）
+        # 进入阈值基准：body = 肩-踝垂直距（原行为）；torso = 肩中点到髋中点的距离
+        # （不受屈膝与前倾影响，是更稳定的基准量）
+        self.entry_ref = entry_ref
+        self.entry_threshold_multiplier = entry_multiplier
+        self.rebound_threshold_multiplier = 0.5  # 折返判定阈值（同基准量的倍数）
 
     def _get_body_height(self, valid_kpts):
         """从关键点估算身高"""
         if valid_kpts and 'left_shoulder' in valid_kpts and 'left_ankle' in valid_kpts:
             return abs(valid_kpts['left_shoulder'][1] - valid_kpts['left_ankle'][1])
         return 500  # 默认值
+
+    def _get_torso_length(self, valid_kpts):
+        """肩中点到髋中点的距离。相比肩-踝垂直距，它不随屈膝和躯干前倾而缩短。"""
+        if not valid_kpts:
+            return None
+        ls, rs = valid_kpts.get('left_shoulder'), valid_kpts.get('right_shoulder')
+        lh, rh = valid_kpts.get('left_hip'), valid_kpts.get('right_hip')
+        if not (ls and rs and lh and rh):
+            return None
+        sh = ((ls[0] + rs[0]) / 2.0, (ls[1] + rs[1]) / 2.0)
+        hip = ((lh[0] + rh[0]) / 2.0, (lh[1] + rh[1]) / 2.0)
+        length = float(np.hypot(sh[0] - hip[0], sh[1] - hip[1]))
+        return length if length > 1.0 else None
+
+    def _entry_reference(self, valid_kpts):
+        """区间判据使用的基准量；torso 不可用时回退到肩-踝垂直距。"""
+        if self.entry_ref == "torso":
+            torso = self._get_torso_length(valid_kpts)
+            if torso:
+                return torso
+        return self._get_body_height(valid_kpts) if valid_kpts else 500
 
     def _get_wrist_y(self, valid_kpts):
         """获取手腕Y坐标（取左右手平均）"""
@@ -472,6 +496,7 @@ class ActionSession:
         """
         # 计算身高和手腕Y坐标
         body_height = self._get_body_height(valid_kpts) if valid_kpts else 500
+        entry_reference = self._entry_reference(valid_kpts)
         wrist_y = self._get_wrist_y(valid_kpts)
 
         # 计算排球距离和位置
@@ -511,8 +536,8 @@ class ActionSession:
             if distances:
                 distance = min(distances)
 
-        # 进入阈值：身高的1.3倍
-        entry_threshold = body_height * self.entry_threshold_multiplier
+        # 进入阈值：基准量 × 倍数（默认 1.3 倍肩-踝垂直距）
+        entry_threshold = entry_reference * self.entry_threshold_multiplier
 
         # 判断是否在范围内且排球在手腕上方
         in_range = distance is not None and distance < entry_threshold
@@ -546,7 +571,7 @@ class ActionSession:
                     print(f"--- 动作区间结束，记录帧数: {len(self.interval_records)} ---")
 
                 # 使用宏观落差法检测折返
-                if len(self.interval_records) >= 4 or self._check_rebound(self.interval_records, body_height):
+                if len(self.interval_records) >= 4 or self._check_rebound(self.interval_records, entry_reference):
                     self.dig_count += 1
                     if DEBUG_LOG:
                         print(f"检测到动作！次数: {self.dig_count}")
