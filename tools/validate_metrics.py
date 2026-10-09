@@ -146,6 +146,10 @@ def main():
     parser.add_argument("--min-frames", type=int, default=8, help="时序通道动作区间最少帧数（默认 8，过滤切分不完整的片段）")
     parser.add_argument("--max-len-ratio", type=float, default=3.0,
                         help="时序通道动作区间长度上限（相对本视频中位帧数的倍数，0=关闭）")
+    parser.add_argument("--entry-ref", choices=("body", "torso"), default="body",
+                        help="时序通道区间判据基准：body=肩-踝垂直距，torso=肩中-髋中距离")
+    parser.add_argument("--entry-multiplier", type=float, default=1.3,
+                        help="时序通道进入阈值 = 基准量 × 该倍数（需与建模板时一致）")
     parser.add_argument("--out", default=str(ROOT / "validation"), help="输出目录")
     parser.add_argument("--limit", type=int, default=0, help="最多处理多少个视频（0=全部）")
     parser.add_argument("--system-max", type=float, default=100.0, help="系统评分满分（默认 100）")
@@ -208,7 +212,9 @@ def main():
             video_action = group["action"] or args.action
             try:
                 collector, _fps = collect_clips(video, video_action, min_frames=args.min_frames,
-                                                max_len_ratio=args.max_len_ratio)
+                                                max_len_ratio=args.max_len_ratio,
+                                                entry_ref=args.entry_ref,
+                                                entry_multiplier=args.entry_multiplier)
                 if collector.dropped_long:
                     print(f"  剔除 {collector.dropped_long} 个超长区间（疑似切分未退出）")
                 if not settings_warned:

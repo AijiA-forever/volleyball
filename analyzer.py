@@ -11,7 +11,7 @@ from body import (
     calculate_angle,
 )
 from tracking import SimpleTracker
-from metrics import compute_frame_metrics, summarize as summarize_biomechanics
+from metrics import body_height_px, compute_frame_metrics, summarize as summarize_biomechanics
 from geometry import homography_from_points, correct_keypoints
 from pose_judge import judge_pose
 from volleyball_detect import (
@@ -215,10 +215,8 @@ class VolleyballActionAnalyzer:
             return None, False
 
     def get_body_height(self, valid_kpts):
-        """从关键点估算身高（肩部到脚踝的垂直距离）"""
-        if valid_kpts and 'left_shoulder' in valid_kpts and 'left_ankle' in valid_kpts:
-            return abs(valid_kpts['left_shoulder'][1] - valid_kpts['left_ankle'][1])
-        return 500  # 默认值
+        """肩中点到踝中点的垂直距离（与 metrics 口径一致）；取不到时返回 None。"""
+        return body_height_px(valid_kpts) if valid_kpts else None
 
     def get_wrist_y(self, valid_kpts):
         """获取手腕Y坐标（取左右手平均）"""
@@ -415,12 +413,23 @@ class ActionSession:
         self.entry_ref = entry_ref
         self.entry_threshold_multiplier = entry_multiplier
         self.rebound_threshold_multiplier = 0.5  # 折返判定阈值（同基准量的倍数）
+        self._last_body_height = None  # 最近一帧有效身高，关键点缺失时回退用
 
     def _get_body_height(self, valid_kpts):
-        """从关键点估算身高"""
-        if valid_kpts and 'left_shoulder' in valid_kpts and 'left_ankle' in valid_kpts:
-            return abs(valid_kpts['left_shoulder'][1] - valid_kpts['left_ankle'][1])
-        return 500  # 默认值
+        """肩中点到踝中点的垂直距离（与 metrics 及时序特征同一口径）。
+
+        取不到关键点时返回 None，由调用方决定回退策略。原来直接返回 500 像素
+        常数会让阈值退化成 650 像素，在关键点缺失帧造成误触发。
+        """
+        return body_height_px(valid_kpts) if valid_kpts else None
+
+    def _resolve_body_height(self, valid_kpts):
+        """当前帧身高；取不到时沿用本会话最近一帧的有效值。"""
+        height = self._get_body_height(valid_kpts)
+        if height:
+            self._last_body_height = height
+            return height
+        return self._last_body_height
 
     def _get_torso_length(self, valid_kpts):
         """肩中点到髋中点的距离。相比肩-踝垂直距，它不随屈膝和躯干前倾而缩短。"""
@@ -441,7 +450,7 @@ class ActionSession:
             torso = self._get_torso_length(valid_kpts)
             if torso:
                 return torso
-        return self._get_body_height(valid_kpts) if valid_kpts else 500
+        return self._resolve_body_height(valid_kpts)
 
     def _get_wrist_y(self, valid_kpts):
         """获取手腕Y坐标（取左右手平均）"""
@@ -495,7 +504,6 @@ class ActionSession:
         每帧调用一次，使用"宽进严出"的区间结算逻辑
         """
         # 计算身高和手腕Y坐标
-        body_height = self._get_body_height(valid_kpts) if valid_kpts else 500
         entry_reference = self._entry_reference(valid_kpts)
         wrist_y = self._get_wrist_y(valid_kpts)
 
@@ -537,10 +545,11 @@ class ActionSession:
                 distance = min(distances)
 
         # 进入阈值：基准量 × 倍数（默认 1.3 倍肩-踝垂直距）
-        entry_threshold = entry_reference * self.entry_threshold_multiplier
+        # 视频最开始若还没有任何有效身高，本帧无法判断区间
+        entry_threshold = entry_reference * self.entry_threshold_multiplier if entry_reference else None
 
         # 判断是否在范围内且排球在手腕上方
-        in_range = distance is not None and distance < entry_threshold
+        in_range = distance is not None and entry_threshold is not None and distance < entry_threshold
         above_wrist = volleyball_y is not None and wrist_y is not None and volleyball_y < wrist_y
 
         should_be_active = in_range and above_wrist
@@ -571,7 +580,8 @@ class ActionSession:
                     print(f"--- 动作区间结束，记录帧数: {len(self.interval_records)} ---")
 
                 # 使用宏观落差法检测折返
-                if len(self.interval_records) >= 4 or self._check_rebound(self.interval_records, entry_reference):
+                rebound_ok = entry_reference is not None and self._check_rebound(self.interval_records, entry_reference)
+                if len(self.interval_records) >= 4 or rebound_ok:
                     self.dig_count += 1
                     if DEBUG_LOG:
                         print(f"检测到动作！次数: {self.dig_count}")
@@ -648,3 +658,4 @@ class ActionSession:
         self.action_feedbacks = []
         self.dig_count = 0
         self.interval_records = []
+        self._last_body_height = None

@@ -51,6 +51,8 @@ FEATURE_KEYS = ANGLE_KEYS + DERIVED_KEYS + POS_KEYS
 SCALES = [90.0] * (len(ANGLE_KEYS) + len(DERIVED_KEYS)) + [0.25] * len(POS_KEYS)
 MIN_CLIP_FRAMES = 4
 DEFAULT_MAX_LEN_RATIO = 3.0
+DEFAULT_ENTRY_REF = "body"        # 区间判据基准：body=肩-踝垂直距，torso=肩中-髋中距离
+DEFAULT_ENTRY_MULTIPLIER = 1.3    # 进入阈值 = 基准量 × 该倍数
 
 
 def drop_long_clips(clips: list, max_ratio: float = DEFAULT_MAX_LEN_RATIO):
@@ -280,7 +282,9 @@ def settings_mismatch(template_settings, current_settings) -> list:
 
 
 def collect_clips(video: Path, action_type: str = "dig", min_frames: int = MIN_CLIP_FRAMES,
-                  max_len_ratio: float = DEFAULT_MAX_LEN_RATIO):
+                  max_len_ratio: float = DEFAULT_MAX_LEN_RATIO,
+                  entry_ref: str = DEFAULT_ENTRY_REF,
+                  entry_multiplier: float = DEFAULT_ENTRY_MULTIPLIER):
     """用现有分析器跑一遍视频并采集动作序列（不写结果视频、不落库）。"""
     import cv2
 
@@ -290,12 +294,14 @@ def collect_clips(video: Path, action_type: str = "dig", min_frames: int = MIN_C
     )
 
     analyzer = VolleyballActionAnalyzer(detect_volleyball=True)
-    analyzer.action_session = ActionSession(action_type)
+    analyzer.action_session = ActionSession(action_type, entry_ref=entry_ref,
+                                            entry_multiplier=entry_multiplier)
     analyzer.reset_tracking()
     collector = SequenceCollector(min_frames=min_frames)
     collector.settings = {
         "pose_imgsz": POSE_IMGSZ, "pose_conf": POSE_CONF,
         "ball_imgsz": BALL_IMGSZ, "ball_conf": BALL_CONF,
+        "entry_ref": entry_ref, "entry_multiplier": entry_multiplier,
     }
     cap = cv2.VideoCapture(str(video))
     if not cap.isOpened():
@@ -402,6 +408,10 @@ def main() -> int:
                         help=f"动作区间的最少帧数，低于该值不计入（默认 {MIN_CLIP_FRAMES}）")
     parser.add_argument("--max-len-ratio", type=float, default=DEFAULT_MAX_LEN_RATIO,
                         help=f"动作区间长度上限，超过本视频中位帧数的该倍数即剔除，0=关闭（默认 {DEFAULT_MAX_LEN_RATIO:g}）")
+    parser.add_argument("--entry-ref", choices=("body", "torso"), default=DEFAULT_ENTRY_REF,
+                        help=f"区间判据的基准量：body=肩-踝垂直距，torso=肩中-髋中距离（默认 {DEFAULT_ENTRY_REF}）")
+    parser.add_argument("--entry-multiplier", type=float, default=DEFAULT_ENTRY_MULTIPLIER,
+                        help=f"进入阈值 = 基准量 × 该倍数（默认 {DEFAULT_ENTRY_MULTIPLIER:g}）")
     args = parser.parse_args()
 
     if args.self_test:
@@ -420,7 +430,9 @@ def main() -> int:
         matrices, sources, settings_seen = [], [], {}
         for video in videos:
             collector, fps = collect_clips(video, action, min_frames=args.min_frames,
-                                           max_len_ratio=args.max_len_ratio)
+                                           max_len_ratio=args.max_len_ratio,
+                                           entry_ref=args.entry_ref,
+                                           entry_multiplier=args.entry_multiplier)
             settings_seen = collector.settings
             for clip in collector.clips:
                 matrices.append(clip_matrix(clip))
@@ -446,7 +458,8 @@ def main() -> int:
         parser.error("需要 --video 与 --template（或用 --build-template / --self-test）")
     template, action_type, meta = load_template(Path(args.template))
     collector, fps = collect_clips(Path(args.video), args.action or action_type,
-                                   min_frames=args.min_frames, max_len_ratio=args.max_len_ratio)
+                                   min_frames=args.min_frames, max_len_ratio=args.max_len_ratio,
+                                   entry_ref=args.entry_ref, entry_multiplier=args.entry_multiplier)
     mismatches = settings_mismatch(meta.get("settings"), collector.settings)
     if mismatches:
         print("注意：当前推理配置与建模板时不一致，相似度不可直接比较（关键点会变，切分边界也会变）：")
